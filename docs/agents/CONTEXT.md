@@ -67,6 +67,12 @@
 - `search/ranking.rs`: `title_match_bonus(title, query) -> f64` (exact > prefix > word-boundary > substring), `secondary_hint_for_kind(kind) -> Option<String>`.
 - `search/engine.rs`: `SearchEngine` wrapping `Arc<ArcSwap<IndexSnapshot>>` with `new`, `from_arc`, `update_index`, `snapshot`, `search(query, frecency, max_results, prefix_threshold, now_unix) -> Vec<SearchResult>` using `nucleo-matcher`.
 
+## Module: app / commands / tray (WP-06)
+- `app.rs`: `AppState` (`app_dir`, `config: Arc<ArcSwap<LaunchifyConfig>>`, `search_engine`, `index_manager`, `frecency`, `prev_foreground_hwnd`, `hook_handle`, `watcher_handle`, `last_query`), `setup_app(app)` (logging, config, `index.bin` + background rebuild if empty, `frecency.json`, `WinKeyHookHandle`, `tray::setup_tray`, Mica/Acrylic vibrancy + `WS_EX_TOOLWINDOW`), `show_launcher`, `hide_launcher`, `clamp_launcher_height` (`56..=520`).
+- `commands.rs`: `parse_prefix_mode`, `#[tauri::command]` handlers `query(raw)`, `execute(item_id, action)`, `autocomplete(raw, top_item_title)`, `hide_launcher()`, `resize_launcher(height)`.
+- `tray.rs`: `setup_tray(app)` with `Open Config`, `Re-index`, and `Quit` menu items.
+- `lib.rs`: exports all modules and registers the 5 IPC commands + `app::setup_app` in `run()`.
+
 ## Module: `frontend` (WP-07)
 - `src/types.ts`: TS mirrors of `model.rs` (`ItemKind`, `PrefixMode`, `InlinePreview`, `SearchResult`, `QueryResponse`, `ExecuteOutcome`, `LauncherState`).
 - `src/ipc.ts`: Typed Tauri `invoke` wrappers (`queryBackend`, `executeItem`, `autocompleteQuery`, `hideLauncher`, `resizeLauncher`), event listeners (`onLauncherShown`, `onLauncherHidden`), and `resolveIconUrl` (`convertFileSrc`).
