@@ -42,6 +42,13 @@
 - `storage.rs`: `write_atomic(path, bytes) -> Result<(), String>`, `load_index(path) -> Result<IndexSnapshot, String>` (empty fallback on missing/corrupt/version-mismatch), `save_index_atomic(path, snap) -> Result<(), String>`, `load_frecency(path) -> FrecencyStore`, `save_frecency_atomic(path, store) -> Result<(), String>`.
 - `logging.rs`: `init_logging(log_dir: Option<&Path>) -> Result<(), String>` (idempotent `tracing_subscriber::fmt` with `EnvFilter`, defaults to `info`).
 
+## Module: `inline_tools`, `path_nav` (WP-02)
+- `inline_tools/mod.rs`: `evaluate(query: &str, force_calc: bool, rates: &HashMap<String, f64>) -> Option<InlinePreview>` (dispatches `utils` -> `units` -> `math`; `=` prefix forces evaluation, otherwise auto-detects unambiguous expressions).
+- `inline_tools/math.rs`: `eval_math(input: &str) -> Result<f64, String>`, `format_number(val: f64) -> String`, `looks_like_math_expr(input: &str) -> bool`.
+- `inline_tools/units.rs`: `try_convert(input: &str, rates: &HashMap<String, f64>) -> Option<(String, String, String)>` (offline length/mass/temp/data/time + static USD-base currency rates).
+- `inline_tools/utils.rs`: `try_eval_util(input: &str) -> Option<(String, String, String)>` (`#RRGGBB`/`#RGB` <-> `rgb(r,g,b)`, `uuid`/`uuid4`, `now`/`unix`/10-or-13-digit Unix/ISO-8601 UTC).
+- `path_nav.rs`: `browse_path(raw: &str, exclusions: &ExclusionFilter, limit: usize) -> Vec<SearchResult>`, `complete_path(raw: &str, exclusions: &ExclusionFilter) -> Option<String>`.
+
 ## Module: `search` & `frecency` (WP-03)
 - `frecency.rs`: `normalize_prefix(query)`, `record_selection(store, query_prefix, item_id, now_unix)`, `frecency_score(entry, now_unix) -> f64` (7-day half-life decay), `prefix_memory_boost(store, query_prefix, item_id, threshold) -> f64` (strong boost at `count >= threshold`).
 - `search/ranking.rs`: `title_match_bonus(title, query) -> f64` (exact > prefix > word-boundary > substring), `secondary_hint_for_kind(kind) -> Option<String>`.
