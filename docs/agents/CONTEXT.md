@@ -34,4 +34,10 @@
 - `%LOCALAPPDATA%\Launchify\` — runtime data (`config.json`, `index.bin`, `frecency.json`, `icons\`, `logs\`)
 
 ## Shared Types / DB Schema
-- Defined in `src-tauri/src/model.rs` (WP-01) and mirrored in `src/types.ts` (WP-06).
+- Defined in `src-tauri/src/model.rs` (WP-01) and mirrored in `src/types.ts` (WP-06/WP-07).
+
+## Module: `model`, `config`, `storage`, `logging` (WP-01)
+- `model.rs`: `INDEX_SNAPSHOT_VERSION: u32 = 1`, `ItemKind`, `IndexItem`, `IndexSnapshot`, `FrecencyEntry`, `FrecencyStore`, `ActionKind`, `PrefixMode`, `InlinePreview`, `SearchResult`, `QueryResponse`, `ExecuteOutcome` (`Launched | CopiedToClipboard { value: String } | WindowFocused`, tagged `type`/`value`).
+- `config.rs`: `LaunchifyConfig` (`curated_folders`, `custom_workflows`, `web_shortcuts`, `currency_rates`, `extra_exclusions`, `prefix_memory_threshold`, `max_results`), `validate(cfg) -> LaunchifyConfig`, `load_or_create(app_dir) -> Result<LaunchifyConfig, String>`, `save_config_atomic(app_dir, cfg) -> Result<(), String>`, `ExclusionFilter::new(extra)` (`is_excluded_dir`, `is_excluded_file`, `is_excluded`).
+- `storage.rs`: `write_atomic(path, bytes) -> Result<(), String>`, `load_index(path) -> Result<IndexSnapshot, String>` (empty fallback on missing/corrupt/version-mismatch), `save_index_atomic(path, snap) -> Result<(), String>`, `load_frecency(path) -> FrecencyStore`, `save_frecency_atomic(path, store) -> Result<(), String>`.
+- `logging.rs`: `init_logging(log_dir: Option<&Path>) -> Result<(), String>` (idempotent `tracing_subscriber::fmt` with `EnvFilter`, defaults to `info`).
