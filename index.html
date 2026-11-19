@@ -6,7 +6,25 @@
     <title>Launchify</title>
   </head>
   <body>
-    <div id="app"></div>
+    <main id="launcher" role="dialog" aria-label="Launchify">
+      <div id="search-row">
+        <span id="mode-badge" hidden></span>
+        <input
+          id="search-input"
+          type="text"
+          autocomplete="off"
+          autocorrect="off"
+          autocapitalize="off"
+          spellcheck="false"
+          placeholder="Search apps, settings, files..."
+          aria-label="Search"
+          aria-autocomplete="list"
+          aria-controls="results-list"
+        />
+        <span id="inline-preview" hidden></span>
+      </div>
+      <div id="results-list" role="listbox" hidden></div>
+    </main>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

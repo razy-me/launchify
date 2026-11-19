@@ -66,3 +66,11 @@
 - `frecency.rs`: `normalize_prefix(query)`, `record_selection(store, query_prefix, item_id, now_unix)`, `frecency_score(entry, now_unix) -> f64` (7-day half-life decay), `prefix_memory_boost(store, query_prefix, item_id, threshold) -> f64` (strong boost at `count >= threshold`).
 - `search/ranking.rs`: `title_match_bonus(title, query) -> f64` (exact > prefix > word-boundary > substring), `secondary_hint_for_kind(kind) -> Option<String>`.
 - `search/engine.rs`: `SearchEngine` wrapping `Arc<ArcSwap<IndexSnapshot>>` with `new`, `from_arc`, `update_index`, `snapshot`, `search(query, frecency, max_results, prefix_threshold, now_unix) -> Vec<SearchResult>` using `nucleo-matcher`.
+
+## Module: `frontend` (WP-07)
+- `src/types.ts`: TS mirrors of `model.rs` (`ItemKind`, `PrefixMode`, `InlinePreview`, `SearchResult`, `QueryResponse`, `ExecuteOutcome`, `LauncherState`).
+- `src/ipc.ts`: Typed Tauri `invoke` wrappers (`queryBackend`, `executeItem`, `autocompleteQuery`, `hideLauncher`, `resizeLauncher`), event listeners (`onLauncherShown`, `onLauncherHidden`), and `resolveIconUrl` (`convertFileSrc`).
+- `src/state.ts`: `createInitialState`, `clampResults` (max 8), `moveSelection` (wrap-around), `computeTargetHeight` (56px idle, 48px/row + 9px padding), `resetQueryState`.
+- `src/renderer.ts`: `getDomRefs`, `renderVisibility`, `renderState`, `updateSelectionOnly` (with `2px` left accent bar on `.is-selected`, async `loading="lazy"` icons + fallback glyph, and `resizeLauncher` on height change).
+- `src/keyboard.ts`: `attachKeyboardFlow` (`ArrowUp`/`ArrowDown`/`Ctrl+J`/`Ctrl+K` wrap-around, `Enter`/`Shift+Enter`/`Ctrl+Enter`, `Tab` autocomplete, 2-stage `Escape`, `blur` hide).
+- `src/styles.css`: 680px × 56px idle pill, `border-radius: 14px`, `1px` inner border, `80ms` scale-fade (`0.98 -> 1.0`), zero idle keyframes/timers.
