@@ -42,6 +42,19 @@
 - `storage.rs`: `write_atomic(path, bytes) -> Result<(), String>`, `load_index(path) -> Result<IndexSnapshot, String>` (empty fallback on missing/corrupt/version-mismatch), `save_index_atomic(path, snap) -> Result<(), String>`, `load_frecency(path) -> FrecencyStore`, `save_frecency_atomic(path, store) -> Result<(), String>`.
 - `logging.rs`: `init_logging(log_dir: Option<&Path>) -> Result<(), String>` (idempotent `tracing_subscriber::fmt` with `EnvFilter`, defaults to `info`).
 
+## Module: `win32` (WP-05)
+- `win32/hook.rs`: `VK_LWIN_CODE`, `HookDecision` (`PassThrough | TriggerSoloWin`), `WinKeyStateMachine::on_key_event(vk, is_key_down, is_injected)`, `WinKeyHookHandle::start(trigger_tx)` (`WH_KEYBOARD_LL` on dedicated thread, injects `0xFF` mask key on solo `VK_LWIN` release, `UnhookWindowsHookEx` on `Drop`).
+- `win32/window.rs`: `MonitorRect`, `compute_launcher_position(work_area, logical_width, dpi_scale) -> (i32, i32)` (centered horizontally, 28% vertical anchor), `apply_toolwindow_style(hwnd)`, `save_foreground_window()`, `restore_foreground_window(hwnd)`, `show_and_focus_launcher(hwnd, logical_width)`, `hide_launcher_window(hwnd)` (`SW_HIDE`).
+- `win32/switcher.rs`: `WindowInfo { hwnd, title, process_name, exe_path }`, `enumerate_visible_windows() -> Vec<WindowInfo>`, `focus_window(hwnd)`.
+- `win32/executor.rs`: `LaunchMode` (`Normal | Elevated | RevealInExplorer | ShellHidden | ShellTerminal`), `execute_target(target, mode)`, `copy_text_to_clipboard(text)`, `system_power_action(action)`.
+
+## Module: `catalog`, `indexer`, `icons` (WP-04)
+- `catalog.rs`: `builtin_catalog() -> Vec<IndexItem>` (`ms-settings:*` deep-links + `power:*` actions), `synonym_keywords(title) -> Vec<String>`, `config_items(cfg) -> Vec<IndexItem>` (`Workflow` + `WebShortcut`).
+- `icons.rs`: `IconCache::new(cache_dir)` (`icon_path(key)`, `has_cached(key)`, `write_cached_png(key, bytes)`, `get_or_extract(key, target)` using `SHGetFileInfoW` + RGBA->PNG on Windows).
+- `indexer/mod.rs`: `IndexManager::new(snapshot, config, app_dir)` (`snapshot()`, `rebuild_now() -> Result<IndexSnapshot, String>` updating `ArcSwap<IndexSnapshot>` + `index.bin`).
+- `indexer/scanner.rs`: `scan_curated_folders(folders, filter)`, `scan_start_menu(filter)`, `scan_apps_folder()`.
+- `indexer/watcher.rs`: `DEBOUNCE_MS = 1500`, `Debouncer` (`record_event`, `should_flush`, `mark_flushed`), `WatcherHandle`, `spawn_watcher(event_rx, on_flush)` (EcoQoS thread on Windows).
+
 ## Module: `inline_tools`, `path_nav` (WP-02)
 - `inline_tools/mod.rs`: `evaluate(query: &str, force_calc: bool, rates: &HashMap<String, f64>) -> Option<InlinePreview>` (dispatches `utils` -> `units` -> `math`; `=` prefix forces evaluation, otherwise auto-detects unambiguous expressions).
 - `inline_tools/math.rs`: `eval_math(input: &str) -> Result<f64, String>`, `format_number(val: f64) -> String`, `looks_like_math_expr(input: &str) -> bool`.
