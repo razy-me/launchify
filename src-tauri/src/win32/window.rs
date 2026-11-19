@@ -177,7 +177,21 @@ mod win_impl {
                     right: info.rcWork.right,
                     bottom: info.rcWork.bottom,
                 };
-                let dpi = GetDpiForWindow(hwnd);
+                let mut dpi_x: u32 = 96;
+                let mut dpi_y: u32 = 96;
+                let dpi = if windows::Win32::UI::HiDpi::GetDpiForMonitor(
+                    monitor,
+                    windows::Win32::UI::HiDpi::MDT_EFFECTIVE_DPI,
+                    &mut dpi_x,
+                    &mut dpi_y,
+                )
+                .is_ok()
+                    && dpi_x > 0
+                {
+                    dpi_x
+                } else {
+                    GetDpiForWindow(hwnd)
+                };
                 let scale = if dpi > 0 { dpi as f64 / 96.0 } else { 1.0 };
                 let (x, y) = compute_launcher_position(work, logical_width, scale);
                 let _ = SetWindowPos(

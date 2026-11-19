@@ -97,6 +97,11 @@ mod win_impl {
         Ok(())
     }
 
+    /// Escapes double quotes for PowerShell `-Command "..."` arguments.
+    pub fn escape_ps_double_quotes(input: &str) -> String {
+        input.replace('"', "\\\"")
+    }
+
     pub fn execute_target(target: &str, mode: LaunchMode) -> Result<(), String> {
         match mode {
             LaunchMode::Normal => shell_execute("open", target, None, SW_SHOWNORMAL),
@@ -106,17 +111,19 @@ mod win_impl {
                 shell_execute("open", "explorer.exe", Some(&args), SW_SHOWNORMAL)
             }
             LaunchMode::ShellHidden => {
+                let escaped = escape_ps_double_quotes(target);
                 let args = format!(
-                    "-NoProfile -NonInteractive -WindowStyle Hidden -Command \"{target}\""
+                    "-NoProfile -NonInteractive -WindowStyle Hidden -Command \"{escaped}\""
                 );
                 shell_execute("open", "powershell.exe", Some(&args), SW_HIDE)
             }
             LaunchMode::ShellTerminal => {
-                let wt_args = format!("powershell.exe -NoExit -Command \"{target}\"");
+                let escaped = escape_ps_double_quotes(target);
+                let wt_args = format!("powershell.exe -NoExit -Command \"{escaped}\"");
                 if shell_execute("open", "wt.exe", Some(&wt_args), SW_SHOWNORMAL).is_ok() {
                     Ok(())
                 } else {
-                    let ps_args = format!("-NoExit -Command \"{target}\"");
+                    let ps_args = format!("-NoExit -Command \"{escaped}\"");
                     shell_execute("open", "powershell.exe", Some(&ps_args), SW_SHOWNORMAL)
                 }
             }

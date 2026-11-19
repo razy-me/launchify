@@ -33,6 +33,7 @@ pub struct AppState {
     pub prev_foreground_hwnd: Mutex<Option<isize>>,
     pub hook_handle: Mutex<Option<WinKeyHookHandle>>,
     pub watcher_handle: Mutex<Option<WatcherHandle>>,
+    pub watch_tx: crossbeam_channel::Sender<()>,
     pub last_query: Mutex<String>,
 }
 
@@ -134,6 +135,16 @@ pub fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>>
         }
     };
 
+    let (watch_tx, watch_rx) = crossbeam_channel::bounded::<()>(16);
+    let idx_for_watch = Arc::clone(&index_manager);
+    let eng_for_watch = Arc::clone(&search_engine);
+    let watcher_handle = crate::indexer::watcher::spawn_watcher(watch_rx, move || {
+        match idx_for_watch.rebuild_now() {
+            Ok(snap) => eng_for_watch.update_index(snap),
+            Err(e) => tracing::warn!("Watcher index rebuild failed: {e}"),
+        }
+    });
+
     let state = AppState {
         app_dir,
         config: config_swap,
@@ -142,7 +153,8 @@ pub fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>>
         frecency: Mutex::new(frecency),
         prev_foreground_hwnd: Mutex::new(None),
         hook_handle: Mutex::new(hook_handle),
-        watcher_handle: Mutex::new(None),
+        watcher_handle: Mutex::new(Some(watcher_handle)),
+        watch_tx,
         last_query: Mutex::new(String::new()),
     };
     app.manage(state);
