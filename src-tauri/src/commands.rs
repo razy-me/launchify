@@ -28,6 +28,21 @@ pub fn parse_prefix_mode(raw: &str) -> (PrefixMode, &str) {
     }
 }
 
+fn encode_base64(input: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
+    for chunk in input.chunks(3) {
+        let b0 = chunk[0] as usize;
+        let b1 = if chunk.len() > 1 { chunk[1] as usize } else { 0 };
+        let b2 = if chunk.len() > 2 { chunk[2] as usize } else { 0 };
+        out.push(TABLE[b0 >> 2] as char);
+        out.push(TABLE[((b0 & 0x03) << 4) | (b1 >> 4)] as char);
+        out.push(if chunk.len() > 1 { TABLE[((b1 & 0x0f) << 2) | (b2 >> 6)] as char } else { '=' });
+        out.push(if chunk.len() > 2 { TABLE[b2 & 0x3f] as char } else { '=' });
+    }
+    out
+}
+
 /// Evaluates a launcher query across prefix modes, inline tools, and fuzzy search.
 #[tauri::command]
 pub fn query(raw: String, state: State<'_, AppState>) -> Result<QueryResponse, String> {
@@ -106,25 +121,34 @@ pub fn query(raw: String, state: State<'_, AppState>) -> Result<QueryResponse, S
             })
         }
         PrefixMode::Global => {
-            if rest.is_empty() {
-                return Ok(QueryResponse {
-                    mode,
-                    results: Vec::new(),
-                    inline_preview: None,
-                });
-            }
-            let inline_preview = inline_tools::evaluate(rest, false, &cfg.currency_rates);
+            let inline_preview = if rest.is_empty() {
+                None
+            } else {
+                inline_tools::evaluate(rest, false, &cfg.currency_rates)
+            };
             let frecency = state
                 .frecency
                 .lock()
                 .map_err(|_| "frecency lock poisoned".to_string())?;
-            let results = state.search_engine.search(
+            let mut results = state.search_engine.search(
                 rest,
                 &frecency,
                 cfg.max_results,
                 cfg.prefix_memory_threshold,
                 now_unix(),
             );
+            let icons_dir = state.app_dir.join("icons");
+            for r in &mut results {
+                if let Some(key) = &r.icon_path {
+                    let p = icons_dir.join(format!("{key}.png"));
+                    if let Ok(bytes) = std::fs::read(&p) {
+                        let b64 = encode_base64(&bytes);
+                        r.icon_path = Some(format!("data:image/png;base64,{b64}"));
+                    } else {
+                        r.icon_path = None;
+                    }
+                }
+            }
             Ok(QueryResponse {
                 mode,
                 results,
@@ -139,7 +163,7 @@ pub fn query(raw: String, state: State<'_, AppState>) -> Result<QueryResponse, S
 pub fn execute(
     item_id: String,
     action: ActionKind,
-    app: AppHandle,
+    _app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<ExecuteOutcome, String> {
     let secondary = action == ActionKind::Secondary;
@@ -174,6 +198,24 @@ pub fn execute(
         win32::executor::copy_text_to_clipboard(copy_val)?;
         ExecuteOutcome::CopiedToClipboard {
             value: copy_val.to_string(),
+        }
+    } else if item_id == "__inline__" {
+        let raw = state
+            .last_query
+            .lock()
+            .map(|q| q.clone())
+            .unwrap_or_default();
+        let (mode, rest) = parse_prefix_mode(&raw);
+        let cfg = state.config.load();
+        if let Some(preview) =
+            inline_tools::evaluate(rest, mode == PrefixMode::Calc, &cfg.currency_rates)
+        {
+            win32::executor::copy_text_to_clipboard(&preview.copy_value)?;
+            ExecuteOutcome::CopiedToClipboard {
+                value: preview.copy_value,
+            }
+        } else {
+            return Err("No inline preview available to copy".to_string());
         }
     } else {
         let snapshot = state.search_engine.snapshot();
@@ -218,12 +260,10 @@ pub fn execute(
             win32::executor::copy_text_to_clipboard(&item_id)?;
             ExecuteOutcome::CopiedToClipboard { value: item_id }
         } else {
-            win32::executor::execute_target(&item_id, LaunchMode::Normal)?;
-            ExecuteOutcome::Launched
+            return Err(format!("Unknown or unindexed item id: {item_id}"));
         }
     };
 
-    app::hide_launcher(&app, &state);
     Ok(outcome)
 }
 
@@ -247,6 +287,22 @@ pub fn autocomplete(
 #[tauri::command]
 pub fn hide_launcher(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     app::hide_launcher(&app, &state);
+    Ok(())
+}
+
+/// Resizes and repositions the launcher window to frame only the launched row in-place.
+#[tauri::command]
+pub fn collapse_to_row(y_offset: i32, height: u32, app: AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("main") {
+        let scale = window.scale_factor().unwrap_or(1.0);
+        if let Ok(pos) = window.outer_position() {
+            let new_y = pos.y + (f64::from(y_offset) * scale).round() as i32;
+            let _ = window.set_position(tauri::PhysicalPosition::new(pos.x, new_y));
+        }
+        window
+            .set_size(LogicalSize::new(LAUNCHER_WIDTH as f64, height.max(36) as f64))
+            .map_err(|e| format!("failed to collapse launcher: {e}"))?;
+    }
     Ok(())
 }
 

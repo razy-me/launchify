@@ -50,14 +50,29 @@ impl IndexManager {
         let mut raw_items = Vec::new();
         raw_items.extend(builtin_catalog());
         raw_items.extend(config_items(&cfg));
-        raw_items.extend(scanner::scan_apps_folder());
         raw_items.extend(scanner::scan_start_menu(&filter));
+        raw_items.extend(scanner::scan_apps_folder());
         raw_items.extend(scanner::scan_curated_folders(&cfg.curated_folders, &filter));
 
+        let icon_cache = crate::icons::IconCache::new(self.app_dir.join("icons"));
         let mut seen = HashSet::with_capacity(raw_items.len());
+        let mut seen_app_titles = HashSet::new();
         let mut items: Vec<IndexItem> = Vec::with_capacity(raw_items.len());
-        for item in raw_items {
+        for mut item in raw_items {
+            let is_app = matches!(
+                item.kind,
+                crate::model::ItemKind::App | crate::model::ItemKind::StoreApp
+            );
+            if is_app && !seen_app_titles.insert(item.title.to_ascii_lowercase()) {
+                continue;
+            }
             if seen.insert(item.id.clone()) {
+                if is_app && !item.target.is_empty() {
+                    let key = format!("{:016x}", fnv1a_64(item.target.as_bytes()));
+                    if icon_cache.get_or_extract(&key, &item.target).is_some() {
+                        item.icon_key = Some(key);
+                    }
+                }
                 items.push(item);
             }
         }
@@ -77,6 +92,15 @@ impl IndexManager {
         save_index_atomic(&self.app_dir.join("index.bin"), &snap)?;
         Ok(snap)
     }
+}
+
+fn fnv1a_64(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for &b in bytes {
+        hash ^= u64::from(b);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
 }
 
 #[cfg(test)]

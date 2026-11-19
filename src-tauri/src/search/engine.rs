@@ -67,16 +67,20 @@ impl SearchEngine {
         for item in &snap.items {
             let title_fuzzy = pattern.score(Utf32Str::new(&item.title, &mut buf), &mut matcher);
 
-            let kw_fuzzy = if title_fuzzy.is_none() {
-                item.keywords
-                    .iter()
-                    .filter_map(|kw| pattern.score(Utf32Str::new(kw, &mut buf), &mut matcher))
-                    .max()
-            } else {
-                None
-            };
+            let kw_fuzzy = item
+                .keywords
+                .iter()
+                .filter_map(|kw| pattern.score(Utf32Str::new(kw, &mut buf), &mut matcher))
+                .max();
 
-            let sub_fuzzy = if title_fuzzy.is_none() && kw_fuzzy.is_none() {
+            let allow_sub_match = matches!(
+                item.kind,
+                crate::model::ItemKind::Folder
+                    | crate::model::ItemKind::File
+                    | crate::model::ItemKind::Workflow
+                    | crate::model::ItemKind::WebShortcut
+            );
+            let sub_fuzzy = if allow_sub_match && title_fuzzy.is_none() && kw_fuzzy.is_none() {
                 pattern.score(Utf32Str::new(&item.subtitle, &mut buf), &mut matcher)
             } else {
                 None

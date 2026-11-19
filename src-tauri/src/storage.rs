@@ -11,7 +11,11 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
             .map_err(|e| format!("failed to create parent dir {}: {e}", parent.display()))?;
     }
 
-    let tmp_path = path.with_extension("tmp");
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let tmp_path = path.with_extension(format!("{}.{}.tmp", std::process::id(), unique));
     {
         let file = File::create(&tmp_path)
             .map_err(|e| format!("failed to create temp file {}: {e}", tmp_path.display()))?;
@@ -23,6 +27,9 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
             .flush()
             .map_err(|e| format!("failed to flush temp file {}: {e}", tmp_path.display()))?;
     }
+
+    #[cfg(windows)]
+    let _ = fs::remove_file(path);
 
     fs::rename(&tmp_path, path).map_err(|e| {
         let _ = fs::remove_file(&tmp_path);
@@ -201,6 +208,20 @@ mod tests {
         fs::write(&frec_path, "{broken json").unwrap();
         let fallback = load_frecency(&frec_path);
         assert!(fallback.entries.is_empty());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_atomic_overwrites_existing_file() {
+        let dir = temp_dir("overwrite_existing");
+        let target = dir.join("data.bin");
+
+        write_atomic(&target, b"initial").unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"initial");
+
+        write_atomic(&target, b"updated").unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"updated");
 
         let _ = fs::remove_dir_all(&dir);
     }

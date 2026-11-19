@@ -14,7 +14,15 @@ export function attachKeyboardFlow(
   state: LauncherState,
   handlers: KeyboardHandlers
 ): () => void {
+  let altDownAlone = false;
+
   const onKeyDown = (e: KeyboardEvent): void => {
+    if (e.key === "Alt" && e.location === 1 && !e.repeat) {
+      altDownAlone = true;
+      return;
+    }
+    altDownAlone = false;
+
     const isCtrlOnly = e.ctrlKey && !e.altKey && !e.metaKey;
 
     if (e.key === "ArrowDown" || (isCtrlOnly && (e.key === "j" || e.key === "J"))) {
@@ -58,15 +66,30 @@ export function attachKeyboardFlow(
     }
   };
 
+  const onKeyUp = (e: KeyboardEvent): void => {
+    if (e.key === "Alt" && e.location === 1 && altDownAlone) {
+      altDownAlone = false;
+      e.preventDefault();
+      handlers.onHide();
+    }
+  };
+
   const onWindowBlur = (): void => {
-    handlers.onHide();
+    altDownAlone = false;
+    requestAnimationFrame(() => {
+      if (!document.hasFocus()) {
+        handlers.onHide();
+      }
+    });
   };
 
   window.addEventListener("keydown", onKeyDown);
+  window.addEventListener("keyup", onKeyUp);
   window.addEventListener("blur", onWindowBlur);
 
   return () => {
     window.removeEventListener("keydown", onKeyDown);
+    window.removeEventListener("keyup", onKeyUp);
     window.removeEventListener("blur", onWindowBlur);
   };
 }

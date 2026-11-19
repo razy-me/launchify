@@ -101,7 +101,7 @@ fn scan_lnk_dir(dir: &Path, filter: &ExclusionFilter, out: &mut Vec<IndexItem>) 
             keywords,
             kind: ItemKind::App,
             target: target.clone(),
-            icon_key: Some(format!("app_{stem}")),
+            icon_key: None,
         });
     }
 }
@@ -135,6 +135,24 @@ mod tests {
         assert!(!titles.contains(&"photo.png"));
         assert!(!titles.contains(&"nested.txt"));
         assert!(!titles.contains(&"nested_dir"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn scan_lnk_dir_initializes_icon_key_to_none() {
+        let root = std::env::temp_dir().join(format!("launchify_lnk_test_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("Code.lnk"), "dummy").unwrap();
+
+        let filter = ExclusionFilter::default();
+        let mut items = Vec::new();
+        scan_lnk_dir(&root, &filter, &mut items);
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].title, "Code");
+        assert!(items[0].icon_key.is_none());
 
         let _ = fs::remove_dir_all(&root);
     }

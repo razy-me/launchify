@@ -164,8 +164,21 @@ pub fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>>
         .name("launchify-hook-listener".into())
         .spawn(move || {
             while trigger_rx.recv().is_ok() {
-                if let Some(st) = handle_for_hook.try_state::<AppState>() {
-                    show_launcher(&handle_for_hook, &st);
+                let handle = handle_for_hook.clone();
+                if let Err(e) = handle_for_hook.run_on_main_thread(move || {
+                    if let Some(st) = handle.try_state::<AppState>() {
+                        let is_visible = handle
+                            .get_webview_window("main")
+                            .and_then(|w| w.is_visible().ok())
+                            .unwrap_or(false);
+                        if is_visible {
+                            hide_launcher(&handle, &st);
+                        } else {
+                            show_launcher(&handle, &st);
+                        }
+                    }
+                }) {
+                    tracing::warn!("Failed to dispatch show_launcher to main thread: {e}");
                 }
             }
         })?;
@@ -190,9 +203,6 @@ pub fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>>
         {
             if let Ok(hwnd) = window.hwnd() {
                 let _ = win32::window::apply_toolwindow_style(hwnd.0 as isize);
-            }
-            if window_vibrancy::apply_mica(&window, Some(true)).is_err() {
-                let _ = window_vibrancy::apply_acrylic(&window, Some((18, 18, 20, 210)));
             }
         }
     }

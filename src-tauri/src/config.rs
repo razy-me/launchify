@@ -200,9 +200,11 @@ impl ExclusionFilter {
 }
 
 fn normalize_path(path: &Path) -> String {
-    path.to_string_lossy()
+    let s = path
+        .to_string_lossy()
         .to_ascii_lowercase()
-        .replace('/', "\\")
+        .replace('/', "\\");
+    s.strip_prefix("\\\\?\\").unwrap_or(&s).to_string()
 }
 
 #[cfg(test)]

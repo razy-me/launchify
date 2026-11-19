@@ -40,11 +40,11 @@ mod win_impl {
     use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM};
     use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
     use windows::Win32::System::Threading::{
-        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
-        PROCESS_QUERY_LIMITED_INFORMATION,
+        AttachThreadInput, GetCurrentThreadId, OpenProcess, QueryFullProcessImageNameW,
+        PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetWindowLongW, GetWindowTextLengthW, GetWindowTextW,
+        BringWindowToTop, EnumWindows, GetWindowLongW, GetWindowTextLengthW, GetWindowTextW,
         GetWindowThreadProcessId, IsIconic, IsWindowVisible, SetForegroundWindow, ShowWindow,
         GWL_EXSTYLE, SW_RESTORE, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
     };
@@ -60,13 +60,13 @@ mod win_impl {
         }
 
         let mut cloaked: u32 = 0;
-        let _ = DwmGetWindowAttribute(
+        let hr = DwmGetWindowAttribute(
             hwnd,
             DWMWA_CLOAKED,
             (&mut cloaked as *mut u32).cast(),
             std::mem::size_of::<u32>() as u32,
         );
-        if cloaked != 0 {
+        if hr.is_err() || cloaked != 0 {
             return true.into();
         }
 
@@ -150,7 +150,18 @@ mod win_impl {
             if IsIconic(hwnd).as_bool() {
                 let _ = ShowWindow(hwnd, SW_RESTORE);
             }
-            if !SetForegroundWindow(hwnd).as_bool() {
+            let cur_thread = GetCurrentThreadId();
+            let target_thread = GetWindowThreadProcessId(hwnd, None);
+            let attach = target_thread != 0 && target_thread != cur_thread;
+            if attach {
+                let _ = AttachThreadInput(cur_thread, target_thread, true);
+            }
+            let _ = BringWindowToTop(hwnd);
+            let ok = SetForegroundWindow(hwnd).as_bool();
+            if attach {
+                let _ = AttachThreadInput(cur_thread, target_thread, false);
+            }
+            if !ok {
                 return Err(format!("SetForegroundWindow failed for hwnd {hwnd_raw}"));
             }
         }

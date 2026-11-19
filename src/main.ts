@@ -19,16 +19,11 @@ import { clampResults, createInitialState, resetQueryState } from "./state";
 function bootstrap(): void {
   const refs = getDomRefs();
   const state = createInitialState();
+  let executeTimer: number | null = null;
 
   const runQuery = async (rawInput: string): Promise<void> => {
     state.query = rawInput;
     const seq = ++state.querySeq;
-
-    if (rawInput.length === 0) {
-      resetQueryState(state);
-      renderState(refs, state, handleSelectAndExecute);
-      return;
-    }
 
     try {
       const response = await queryBackend(rawInput);
@@ -57,11 +52,32 @@ function bootstrap(): void {
   ): Promise<void> => {
     const selected = state.results[index];
     if (selected) {
-      try {
-        await executeItem(selected.id, state.query, secondary);
-      } catch {
-        // Backend logs execution errors; keep UI responsive
+      const rows = refs.resultsList.querySelectorAll<HTMLElement>(".result-row");
+      const row = rows[index];
+
+      state.visible = false;
+      if (row) {
+        row.classList.add("is-launched", "is-green");
       }
+      refs.launcher.classList.add("is-launch-fading");
+
+      void executeItem(selected.id, state.query, secondary).catch(() => {
+        // Backend logs execution errors; keep UI responsive
+      });
+
+      if (executeTimer !== null) {
+        window.clearTimeout(executeTimer);
+      }
+      executeTimer = window.setTimeout(() => {
+        executeTimer = null;
+        if (!state.visible) {
+          refs.launcher.classList.remove("is-launch-fading", "is-closing");
+          renderVisibility(refs, false);
+          void hideLauncher().catch(() => {
+            // Ignore
+          });
+        }
+      }, 650);
       return;
     }
 
@@ -71,6 +87,7 @@ function bootstrap(): void {
       } catch {
         // Ignore
       }
+      hide();
     }
   };
 
@@ -91,10 +108,16 @@ function bootstrap(): void {
       return;
     }
     state.visible = false;
+    refs.launcher.classList.add("is-closing");
     renderVisibility(refs, false);
-    void hideLauncher().catch(() => {
-      // Ignore when running outside Tauri
-    });
+    window.setTimeout(() => {
+      if (!state.visible) {
+        refs.launcher.classList.remove("is-closing");
+        void hideLauncher().catch(() => {
+          // Ignore when running outside Tauri
+        });
+      }
+    }, 185);
   };
 
   refs.input.addEventListener("input", () => {
@@ -111,7 +134,7 @@ function bootstrap(): void {
     },
     onAutocomplete: () => {
       const selected = state.results[state.selectedIndex];
-      void autocompleteQuery(refs.input.value, selected ? selected.id : null)
+      void autocompleteQuery(refs.input.value, selected ? selected.title : null)
         .then((completed) => {
           if (completed !== null && completed !== refs.input.value) {
             refs.input.value = completed;
@@ -133,10 +156,25 @@ function bootstrap(): void {
   renderState(refs, state, handleSelectAndExecute);
 
   void onLauncherShown(() => {
+    if (executeTimer !== null) {
+      window.clearTimeout(executeTimer);
+      executeTimer = null;
+    }
     state.visible = true;
-    renderVisibility(refs, true);
-    refs.input.focus();
-    refs.input.select();
+    refs.launcher.classList.remove("is-closing", "is-launch-fading");
+    refs.input.value = "";
+    resetQueryState(state);
+    renderVisibility(refs, false);
+    void runQuery("");
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (state.visible) {
+          renderVisibility(refs, true);
+          refs.input.focus();
+          refs.input.select();
+        }
+      });
+    });
   });
 
   void onLauncherHidden(() => {

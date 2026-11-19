@@ -70,8 +70,25 @@ fn extract_png_for_target(target: &str) -> Option<Vec<u8>> {
         CreateCompatibleDC, DeleteDC, DeleteObject, GetDIBits, GetObjectW, SelectObject,
         BITMAP, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
     };
+    use windows::Win32::System::Com::{
+        CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED,
+    };
     use windows::Win32::UI::Shell::{SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON};
     use windows::Win32::UI::WindowsAndMessaging::{DestroyIcon, GetIconInfo, ICONINFO};
+
+    struct ComGuard(bool);
+    impl Drop for ComGuard {
+        fn drop(&mut self) {
+            if self.0 {
+                unsafe {
+                    CoUninitialize();
+                }
+            }
+        }
+    }
+
+    let hr = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+    let _com_guard = ComGuard(hr.is_ok());
 
     let wide: Vec<u16> = OsStr::new(target)
         .encode_wide()
@@ -142,7 +159,7 @@ fn extract_png_for_target(target: &str) -> Option<Vec<u8>> {
                 let _ = DeleteDC(hdc);
 
                 if lines > 0 {
-                    for px in bgra.chunks_exact_mut(4) {
+                    for px in bgra.as_chunks_mut::<4>().0 {
                         px.swap(0, 2); // BGRA -> RGBA
                     }
                     rgba_out = Some(encode_rgba_png(w, h, &bgra));
@@ -270,5 +287,13 @@ mod tests {
         assert_eq!(fs::read(&reused).unwrap(), png);
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn extract_png_for_target_balances_com_initialization() {
+        // Calling extract_png_for_target repeatedly should not leak COM apartment init counts.
+        let _ = extract_png_for_target(r"C:\Windows\System32\notepad.exe");
+        let _ = extract_png_for_target(r"C:\NonExistent\missing_app.exe");
     }
 }

@@ -127,56 +127,56 @@ Launchify/
 
 ## Work Packages
 
-### WP-00 Scaffolding  [ ] status: pending
+### WP-00 Scaffolding  [x] status: approved
 - Covers: R25 (build/lint/typecheck/test hygiene), R23 (`assetProtocol` icon scope)
 - Owns: `package.json`, `tsconfig.json`, `vite.config.ts`, `index.html`, `.gitignore`, `src/main.ts` (minimal skeleton), `src-tauri/Cargo.toml` (pin `bincode = "1"`), `src-tauri/build.rs`, `src-tauri/tauri.conf.json` (enable `assetProtocol` scoped to `$APPLOCALDATA/Launchify/icons/*`), `src-tauri/capabilities/default.json`, `src-tauri/icons/**`, `src-tauri/src/main.rs`, `src-tauri/src/lib.rs` (pre-declare `pub mod` + empty placeholder files for `model`, `config`, `storage`, `logging`, `inline_tools`, `path_nav`, `search`, `frecency`, `catalog`, `indexer`, `icons`, `win32` so Group C WPs compile in parallel without collisions), `docs/agents/CONTEXT.md`
 - Depends on: —
 - Parallel group: A
 - Acceptance: `npm run typecheck`, `npm run build`, `cargo check`, `cargo clippy -- -D warnings`, and `cargo test` all pass green; `docs/agents/CONTEXT.md` created with commands and conventions.
 
-### WP-01 Domain Model, Config, Storage & Logging  [ ] status: pending
+### WP-01 Domain Model, Config, Storage & Logging  [x] status: approved
 - Covers: R15 (config schema), R16 (config schema), R17 (exclusion rules), R22 (`index.bin` bincode persistence), R25 (config validation, defaults, structured logging)
 - Owns: `src-tauri/src/model.rs`, `src-tauri/src/config.rs`, `src-tauri/src/storage.rs`, `src-tauri/src/logging.rs`
 - Depends on: WP-00
 - Parallel group: B
 - Acceptance: `ExclusionFilter` unit-tested against all hard-excluded dirs (`C:\Windows`, `Program Files`, `AppData` except Start Menu, `node_modules`, `.git`, `target`, `dist`, `__pycache__`) and media extensions; `bincode` round-trip load verified `< 2 ms` for 2,000 items; atomic write & corrupt-file fallback tested; `cargo test` & `cargo clippy` green.
 
-### WP-02 Inline Tools & Filesystem Path Navigation  [ ] status: pending
+### WP-02 Inline Tools & Filesystem Path Navigation  [x] status: approved
 - Covers: R10 (`=` math, units, offline currency, Hex/RGB, timestamps/timezones, UUID, inline auto-detect), R11 (`/` path nav & `Tab` completion), R17 (exclusion filter applied in path nav, zero network)
 - Owns: `src-tauri/src/inline_tools/**`, `src-tauri/src/path_nav.rs`
 - Depends on: WP-01
 - Parallel group: C
 - Acceptance: Unit tests cover arithmetic precedence/parentheses/errors (`1920 * 0.75`), unit & currency conversions, `#RRGGBB` <-> `rgb(...)`, Unix/ISO timestamps, UUID v4 format, auto-detection without `=`, and `/` directory listing + `Tab` completion respecting exclusions. Zero network calls.
 
-### WP-03 Lock-Free Search, Ranking & Frecency Engine  [ ] status: pending
+### WP-03 Lock-Free Search, Ranking & Frecency Engine  [x] status: approved
 - Covers: R18 (`nucleo` fuzzy match with word-boundary & exact substring boost over `ArcSwap`, `< 2 ms` top-8), R19 (Frecency with time decay), R20 (Prefix-Memory boost at threshold >= 3)
 - Owns: `src-tauri/src/search/**`, `src-tauri/src/frecency.rs`
 - Depends on: WP-01
 - Parallel group: C
 - Acceptance: Unit tests verify word-boundary ranking (`vs` -> Visual Studio Code above scattered matches), exact substring preference, frecency decay math, prefix-memory boosting an item to #1 after 3 selections, and a benchmark-style test confirming `< 2 ms` query latency over 2,000 items.
 
-### WP-04 Built-in Catalog, Indexer, Icon Cache & Event Watchers  [ ] status: pending
+### WP-04 Built-in Catalog, Indexer, Icon Cache & Event Watchers  [x] status: approved
 - Covers: R13 (`shell:AppsFolder` + Start Menu `.lnk` + synonyms), R14 (`ms-settings:*` deep-links & Power actions), R15 (curated folders top-level scan), R16 (custom workflows & web shortcuts), R17 (strict exclusions), R22 (`ReadDirectoryChangesW` + `SHChangeNotifyRegister`, 1.5 s debounce, EcoQoS thread, `ArcSwap`), R23 (one-time PNG icon cache)
 - Owns: `src-tauri/src/catalog.rs`, `src-tauri/src/indexer/**`, `src-tauri/src/icons.rs`
 - Depends on: WP-01
 - Parallel group: C
 - Acceptance: Built-in catalog includes `ms-settings:` deep-links, Power actions, and synonym aliases; curated folder scanner indexes only folder names & top-level non-media files while skipping excluded dirs; debounce logic and `ArcSwap` update unit-tested; icon cache writes/reuses PNGs without re-extracting.
 
-### WP-05 Win32 OS Integration (Hook, Window/Focus, Switcher, Executor)  [ ] status: pending
+### WP-05 Win32 OS Integration (Hook, Window/Focus, Switcher, Executor)  [x] status: approved
 - Covers: R1 (`MonitorFromPoint` + DPI + 28% anchor), R3 (`WS_EX_TOOLWINDOW` + `window-vibrancy` Mica/Acrylic), R5 (`WH_KEYBOARD_LL` solo `VK_LWIN` thread `< 0.5 ms`, `Win+*` pass-through), R6 (`HWND` save/restore + clean focus), R9 (`>` PowerShell/CMD hidden or Windows Terminal), R12 (`@` window switcher), R21 (`SW_HIDE` warm state), R24 (`ShellExecuteExW` normal/`runas`/Explorer/Terminal/URI), R25 (graceful unhook)
 - Owns: `src-tauri/src/win32/**`
 - Depends on: WP-01
 - Parallel group: C
 - Acceptance: Pure state-machine unit tests for solo `VK_LWIN` vs `Win+E`/`Win+L`/`Win+Shift+S`/`Win+D` pass-through and monitor-rect 28% DPI positioning math; Win32 calls compile cleanly under `#[cfg(windows)]` with zero `clippy` warnings and proper handle cleanup / `UnhookWindowsHookEx` on drop.
 
-### WP-06 Tauri Backend Wiring, IPC Commands & System Tray  [ ] status: pending
+### WP-06 Tauri Backend Wiring, IPC Commands & System Tray  [x] status: approved
 - Covers: R5–R16, R18–R25 (end-to-end backend orchestration)
 - Owns: `src-tauri/src/app.rs`, `src-tauri/src/commands.rs`, `src-tauri/src/tray.rs`, `src-tauri/src/lib.rs`, `src-tauri/src/main.rs`
 - Depends on: WP-02, WP-03, WP-04, WP-05
 - Parallel group: D
 - Acceptance: Wires `AppState`, loads `index.bin` at startup, starts hook thread + background watchers + system tray (Open Config, Re-index, Quit), implements all IPC commands (`query`, `execute`, `autocomplete`, `hide_launcher`, `resize_launcher`), handles graceful shutdown; `cargo check`, `cargo clippy -- -D warnings`, `cargo test` green.
 
-### WP-07 Frontend UI, Micro-Animations & Keyboard Flow  [ ] status: pending
+### WP-07 Frontend UI, Micro-Animations & Keyboard Flow  [x] status: approved
 - Covers: R1 (680px, `border-radius: 14px`), R2 (56px idle search bar, seamless expansion <= 8 rows), R3 (`1px` border `rgba(255,255,255,0.08)`, `Segoe UI Variable` / `JetBrains Mono`, `2px` left accent bar), R4 (`< 90 ms` scale-fade `0.98 -> 1.0`, zero idle animations/timers), R7 (2-stage `Esc` + blur hide), R8 (`↑`/`↓`, `Ctrl+J`/`Ctrl+K`, `Enter`, `Shift/Ctrl+Enter`, `Tab`), R10 (live right-aligned inline result), R23 (async cached icon rendering)
 - Owns: `index.html`, `src/main.ts`, `src/types.ts`, `src/ipc.ts`, `src/state.ts`, `src/renderer.ts`, `src/keyboard.ts`, `src/styles.css`
 - Depends on: WP-00 (IPC contract defined above)
@@ -184,7 +184,7 @@ Launchify/
 - Acceptance: `npm run typecheck` (`tsc --noEmit`), `npm run build`, and frontend unit tests (Vitest for `state.ts` & `keyboard.ts` covering 2-stage `Esc`, wrap-around navigation, `Tab` autocomplete, primary/secondary actions) all pass green; zero CSS keyframes or `setInterval`/`requestAnimationFrame` loops when hidden.
 
 ## Phase Status
-- [x] Phase 1 Plan  - [ ] Phase 2 Build  - [ ] Phase 3 Test  - [ ] Phase 4 Review
+- [x] Phase 1 Plan  - [x] Phase 2 Build  - [x] Phase 3 Test  - [x] Phase 4 Review
 
 ## Plan Review
 Reviewed `SPEC.md`, `TODO.md`, and `DECISIONS.md`. All 25 requirements (R1–R25) are covered, dependencies are acyclic, and the stack fits the performance and resource targets. The following items should be addressed before or during WP-00/WP-01:

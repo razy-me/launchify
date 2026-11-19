@@ -1,23 +1,22 @@
 use crossbeam_channel::Sender;
 
-/// Virtual-key code for Left Windows key.
+/// Virtual-key code for Left Windows key (re-export compatibility).
 pub const VK_LWIN_CODE: u16 = 0x5B;
-/// Virtual-key code for Right Windows key.
-pub const VK_RWIN_CODE: u16 = 0x5C;
-/// Unassigned virtual-key code injected on solo Win release to suppress Start Menu.
-pub const VK_MASK_DUMMY: u16 = 0xFF;
+/// Virtual-key code for Left Alt key (`VK_LMENU`).
+pub const VK_TRIGGER_CODE: u16 = 0xA4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HookDecision {
     PassThrough,
-    TriggerSoloWin,
+    Trigger,
 }
 
-/// Pure state machine for distinguishing solo `VK_LWIN` tap from `Win+*` combos.
+/// Pure state machine for detecting a solo tap of the Left Alt key (`VK_LMENU`)
+/// while leaving `Alt+*` shortcuts untouched.
 #[derive(Debug, Default)]
 pub struct WinKeyStateMachine {
-    lwin_down: bool,
-    combo_used: bool,
+    trigger_down: bool,
+    other_key_pressed: bool,
 }
 
 impl WinKeyStateMachine {
@@ -26,33 +25,33 @@ impl WinKeyStateMachine {
     }
 
     /// Processes a low-level keyboard event and returns whether to pass through
-    /// or trigger the launcher on solo `VK_LWIN` release.
+    /// or trigger the launcher toggle on a solo `VK_LMENU` tap.
     pub fn on_key_event(&mut self, vk: u16, is_key_down: bool, is_injected: bool) -> HookDecision {
         if is_injected {
             return HookDecision::PassThrough;
         }
 
-        if vk == VK_LWIN_CODE {
+        if vk == VK_TRIGGER_CODE {
             if is_key_down {
-                if !self.lwin_down {
-                    self.lwin_down = true;
-                    self.combo_used = false;
+                if !self.trigger_down {
+                    self.trigger_down = true;
+                    self.other_key_pressed = false;
                 }
                 return HookDecision::PassThrough;
-            }
-
-            let was_solo = self.lwin_down && !self.combo_used;
-            self.lwin_down = false;
-            self.combo_used = false;
-            return if was_solo {
-                HookDecision::TriggerSoloWin
             } else {
-                HookDecision::PassThrough
-            };
+                let should_trigger = self.trigger_down && !self.other_key_pressed;
+                self.trigger_down = false;
+                self.other_key_pressed = false;
+                return if should_trigger {
+                    HookDecision::Trigger
+                } else {
+                    HookDecision::PassThrough
+                };
+            }
         }
 
-        if self.lwin_down && is_key_down && vk != VK_RWIN_CODE {
-            self.combo_used = true;
+        if self.trigger_down && is_key_down {
+            self.other_key_pressed = true;
         }
 
         HookDecision::PassThrough
@@ -94,15 +93,12 @@ impl Drop for WinKeyHookHandle {
 
 #[cfg(windows)]
 mod win_impl {
-    use super::{HookDecision, WinKeyHookHandle, WinKeyStateMachine, VK_MASK_DUMMY};
+    use super::{HookDecision, WinKeyHookHandle, WinKeyStateMachine};
     use crossbeam_channel::Sender;
     use std::cell::RefCell;
     use std::sync::mpsc;
     use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
     use windows::Win32::System::Threading::GetCurrentThreadId;
-    use windows::Win32::UI::Input::KeyboardAndMouse::{
-        SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VIRTUAL_KEY,
-    };
     use windows::Win32::UI::WindowsAndMessaging::{
         CallNextHookEx, DispatchMessageW, GetMessageW, PostThreadMessageW, SetWindowsHookExW,
         TranslateMessage, UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT, LLKHF_INJECTED, MSG,
@@ -131,69 +127,27 @@ mod win_impl {
 
             if is_key_down || is_key_up {
                 let is_injected = (kb.flags & LLKHF_INJECTED) != Default::default();
-                let decision = HOOK_CTX.with(|cell| {
+                let vk = kb.vkCode as u16;
+                HOOK_CTX.with(|cell| {
                     let mut borrow = cell.borrow_mut();
                     if let Some(ctx) = borrow.as_mut() {
-                        let d = ctx.machine.on_key_event(
-                            kb.vkCode as u16,
-                            is_key_down,
-                            is_injected,
-                        );
-                        if d == HookDecision::TriggerSoloWin {
+                        let d = ctx.machine.on_key_event(vk, is_key_down, is_injected);
+                        if d == HookDecision::Trigger {
                             let _ = ctx.trigger_tx.try_send(());
                         }
-                        d
-                    } else {
-                        HookDecision::PassThrough
                     }
                 });
-
-                if decision == HookDecision::TriggerSoloWin {
-                    inject_mask_key();
-                }
             }
         }
 
         CallNextHookEx(HHOOK::default(), code, wparam, lparam)
     }
 
-    /// Injects a harmless unassigned virtual key so Windows suppresses the Start Menu
-    /// on solo `VK_LWIN` release without affecting `Win+*` combos.
-    unsafe fn inject_mask_key() {
-        let inputs = [
-            INPUT {
-                r#type: INPUT_KEYBOARD,
-                Anonymous: INPUT_0 {
-                    ki: KEYBDINPUT {
-                        wVk: VIRTUAL_KEY(VK_MASK_DUMMY),
-                        wScan: 0,
-                        dwFlags: Default::default(),
-                        time: 0,
-                        dwExtraInfo: 0,
-                    },
-                },
-            },
-            INPUT {
-                r#type: INPUT_KEYBOARD,
-                Anonymous: INPUT_0 {
-                    ki: KEYBDINPUT {
-                        wVk: VIRTUAL_KEY(VK_MASK_DUMMY),
-                        wScan: 0,
-                        dwFlags: KEYEVENTF_KEYUP,
-                        time: 0,
-                        dwExtraInfo: 0,
-                    },
-                },
-            },
-        ];
-        let _ = SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
-    }
-
     pub fn start_hook_thread(trigger_tx: Sender<()>) -> Result<WinKeyHookHandle, String> {
         let (ready_tx, ready_rx) = mpsc::channel::<Result<u32, String>>();
 
         let join_handle = std::thread::Builder::new()
-            .name("launchify-win-hook".to_string())
+            .name("launchify-kbd-hook".into())
             .spawn(move || unsafe {
                 let tid = GetCurrentThreadId();
                 HOOK_CTX.with(|cell| {
@@ -254,74 +208,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn solo_lwin_tap_triggers_launcher() {
+    fn solo_lalt_tap_triggers_launcher() {
         let mut sm = WinKeyStateMachine::new();
-        assert_eq!(
-            sm.on_key_event(VK_LWIN_CODE, true, false),
-            HookDecision::PassThrough
-        );
-        assert_eq!(
-            sm.on_key_event(VK_LWIN_CODE, false, false),
-            HookDecision::TriggerSoloWin
-        );
+        assert_eq!(sm.on_key_event(VK_TRIGGER_CODE, true, false), HookDecision::PassThrough);
+        assert_eq!(sm.on_key_event(VK_TRIGGER_CODE, true, false), HookDecision::PassThrough);
+        assert_eq!(sm.on_key_event(VK_TRIGGER_CODE, false, false), HookDecision::Trigger);
     }
 
     #[test]
-    fn win_e_combo_passes_through_without_trigger() {
+    fn lalt_combo_passes_through_without_trigger() {
         let mut sm = WinKeyStateMachine::new();
-        assert_eq!(
-            sm.on_key_event(VK_LWIN_CODE, true, false),
-            HookDecision::PassThrough
-        );
-        assert_eq!(
-            sm.on_key_event(b'E' as u16, true, false),
-            HookDecision::PassThrough
-        );
-        assert_eq!(
-            sm.on_key_event(b'E' as u16, false, false),
-            HookDecision::PassThrough
-        );
-        assert_eq!(
-            sm.on_key_event(VK_LWIN_CODE, false, false),
-            HookDecision::PassThrough
-        );
-    }
-
-    #[test]
-    fn win_l_and_win_d_and_win_shift_s_pass_through() {
-        let mut sm = WinKeyStateMachine::new();
-        for key in [b'L' as u16, b'D' as u16] {
-            sm.on_key_event(VK_LWIN_CODE, true, false);
-            sm.on_key_event(key, true, false);
-            sm.on_key_event(key, false, false);
-            assert_eq!(
-                sm.on_key_event(VK_LWIN_CODE, false, false),
-                HookDecision::PassThrough
-            );
-        }
-
-        // Win + Shift + S
-        sm.on_key_event(VK_LWIN_CODE, true, false);
-        sm.on_key_event(0xA0, true, false); // VK_LSHIFT
-        sm.on_key_event(b'S' as u16, true, false);
-        sm.on_key_event(b'S' as u16, false, false);
-        sm.on_key_event(0xA0, false, false);
-        assert_eq!(
-            sm.on_key_event(VK_LWIN_CODE, false, false),
-            HookDecision::PassThrough
-        );
+        assert_eq!(sm.on_key_event(VK_TRIGGER_CODE, true, false), HookDecision::PassThrough);
+        assert_eq!(sm.on_key_event(b'C' as u16, true, false), HookDecision::PassThrough);
+        assert_eq!(sm.on_key_event(b'C' as u16, false, false), HookDecision::PassThrough);
+        assert_eq!(sm.on_key_event(VK_TRIGGER_CODE, false, false), HookDecision::PassThrough);
     }
 
     #[test]
     fn injected_events_are_ignored() {
         let mut sm = WinKeyStateMachine::new();
-        assert_eq!(
-            sm.on_key_event(VK_LWIN_CODE, true, true),
-            HookDecision::PassThrough
-        );
-        assert_eq!(
-            sm.on_key_event(VK_LWIN_CODE, false, true),
-            HookDecision::PassThrough
-        );
+        assert_eq!(sm.on_key_event(VK_TRIGGER_CODE, true, true), HookDecision::PassThrough);
+        assert_eq!(sm.on_key_event(VK_TRIGGER_CODE, false, true), HookDecision::PassThrough);
     }
 }

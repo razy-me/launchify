@@ -57,7 +57,7 @@ fn is_word_boundary_match(title_lower: &str, query_lower: &str) -> bool {
 /// Return a short secondary action hint for the item kind, if applicable.
 pub fn secondary_hint_for_kind(kind: ItemKind) -> Option<String> {
     match kind {
-        ItemKind::App | ItemKind::StoreApp => Some("Run as admin".to_string()),
+        ItemKind::App | ItemKind::StoreApp => None,
         ItemKind::File | ItemKind::Folder => Some("Open containing folder".to_string()),
         _ => None,
     }

@@ -71,7 +71,10 @@ fn format_autocomplete(path: &Path, is_dir: bool) -> String {
 
     #[cfg(windows)]
     {
-        if with_slash.starts_with('/') {
+        let bytes = with_slash.as_bytes();
+        if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+            with_slash
+        } else if with_slash.starts_with('/') {
             with_slash
         } else {
             format!("/{with_slash}")
@@ -207,5 +210,15 @@ mod tests {
         assert!(completed.contains("alpha_dir"));
 
         let _ = fs::remove_dir_all(&temp);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn format_autocomplete_windows_drive_path_has_no_leading_slash() {
+        let dir_result = format_autocomplete(Path::new(r"C:\Tools\alpha_dir"), true);
+        assert_eq!(dir_result, r"C:\Tools\alpha_dir\");
+
+        let file_result = format_autocomplete(Path::new(r"C:\Tools\notes.txt"), false);
+        assert_eq!(file_result, r"C:\Tools\notes.txt");
     }
 }

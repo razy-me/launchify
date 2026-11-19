@@ -73,13 +73,25 @@ export function renderState(
     refs.inlinePreview.hidden = true;
   }
 
+  const wasOpen = refs.launcher.classList.contains("has-results");
   const hasResults = state.results.length > 0;
   refs.launcher.classList.toggle("has-results", hasResults);
+  refs.resultsList.classList.toggle("animate-enter", !wasOpen && hasResults);
   refs.resultsList.hidden = !hasResults;
 
   refs.resultsList.replaceChildren();
   if (hasResults) {
+    const indicator = document.createElement("div");
+    indicator.id = "selection-indicator";
+    if (state.selectedIndex >= 0) {
+      indicator.style.transform = `translateY(${state.selectedIndex * 48}px)`;
+      indicator.style.opacity = "1";
+    } else {
+      indicator.style.opacity = "0";
+    }
+
     const fragment = document.createDocumentFragment();
+    fragment.appendChild(indicator);
     state.results.forEach((item, index) => {
       fragment.appendChild(
         createResultRow(item, index, index === state.selectedIndex, onSelectAndExecute)
@@ -98,16 +110,25 @@ export function renderState(
 }
 
 export function updateSelectionOnly(refs: DomRefs, selectedIndex: number): void {
-  const rows = refs.resultsList.children;
-  for (let i = 0; i < rows.length; i++) {
-    const row = rows[i] as HTMLElement;
+  const indicator = document.getElementById("selection-indicator");
+  if (indicator) {
+    if (selectedIndex >= 0) {
+      indicator.style.transform = `translateY(${selectedIndex * 48}px)`;
+      indicator.style.opacity = "1";
+    } else {
+      indicator.style.opacity = "0";
+    }
+  }
+
+  const rows = refs.resultsList.querySelectorAll<HTMLElement>(".result-row");
+  rows.forEach((row, i) => {
     const isSelected = i === selectedIndex;
     row.classList.toggle("is-selected", isSelected);
     row.setAttribute("aria-selected", isSelected ? "true" : "false");
     if (isSelected) {
       row.scrollIntoView({ block: "nearest" });
     }
-  }
+  });
 }
 
 function createResultRow(
@@ -121,6 +142,7 @@ function createResultRow(
   row.setAttribute("role", "option");
   row.setAttribute("aria-selected", isSelected ? "true" : "false");
   row.dataset.index = String(index);
+  row.style.setProperty("--i", String(index));
 
   const iconWrap = document.createElement("div");
   iconWrap.className = "result-icon";
