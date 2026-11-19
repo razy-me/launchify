@@ -41,3 +41,8 @@
 - `config.rs`: `LaunchifyConfig` (`curated_folders`, `custom_workflows`, `web_shortcuts`, `currency_rates`, `extra_exclusions`, `prefix_memory_threshold`, `max_results`), `validate(cfg) -> LaunchifyConfig`, `load_or_create(app_dir) -> Result<LaunchifyConfig, String>`, `save_config_atomic(app_dir, cfg) -> Result<(), String>`, `ExclusionFilter::new(extra)` (`is_excluded_dir`, `is_excluded_file`, `is_excluded`).
 - `storage.rs`: `write_atomic(path, bytes) -> Result<(), String>`, `load_index(path) -> Result<IndexSnapshot, String>` (empty fallback on missing/corrupt/version-mismatch), `save_index_atomic(path, snap) -> Result<(), String>`, `load_frecency(path) -> FrecencyStore`, `save_frecency_atomic(path, store) -> Result<(), String>`.
 - `logging.rs`: `init_logging(log_dir: Option<&Path>) -> Result<(), String>` (idempotent `tracing_subscriber::fmt` with `EnvFilter`, defaults to `info`).
+
+## Module: `search` & `frecency` (WP-03)
+- `frecency.rs`: `normalize_prefix(query)`, `record_selection(store, query_prefix, item_id, now_unix)`, `frecency_score(entry, now_unix) -> f64` (7-day half-life decay), `prefix_memory_boost(store, query_prefix, item_id, threshold) -> f64` (strong boost at `count >= threshold`).
+- `search/ranking.rs`: `title_match_bonus(title, query) -> f64` (exact > prefix > word-boundary > substring), `secondary_hint_for_kind(kind) -> Option<String>`.
+- `search/engine.rs`: `SearchEngine` wrapping `Arc<ArcSwap<IndexSnapshot>>` with `new`, `from_arc`, `update_index`, `snapshot`, `search(query, frecency, max_results, prefix_threshold, now_unix) -> Vec<SearchResult>` using `nucleo-matcher`.
