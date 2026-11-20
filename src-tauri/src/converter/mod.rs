@@ -14,9 +14,13 @@ pub struct ConvertResult {
     pub bytes_written: u64,
 }
 
-const IMAGE_FORMATS: &[&str] = &["png", "jpg", "jpeg", "webp", "bmp", "gif", "ico", "tiff"];
-const DATA_FORMATS: &[&str] = &["json", "yaml", "toml", "csv"];
-const MEDIA_FORMATS: &[&str] = &["mp4", "mp3", "wav", "webm", "mkv", "ogg", "flac"];
+const IMAGE_EXTS: &[&str] = &[
+    "png", "jpg", "jpeg", "webp", "bmp", "gif", "ico", "tiff", "tga", "qoi", "pnm",
+];
+const VIDEO_EXTS: &[&str] = &["mp4", "mkv", "webm", "mov", "avi", "flv", "wmv", "m4v"];
+const AUDIO_EXTS: &[&str] = &["mp3", "wav", "flac", "ogg", "aac", "m4a", "opus", "wma"];
+const DATA_EXTS: &[&str] = &["json", "yaml", "toml", "csv", "tsv"];
+const PANDOC_EXTS: &[&str] = &["docx", "odt", "rtf", "epub", "rst", "tex"];
 
 fn normalize_ext(ext: &str) -> String {
     ext.trim().trim_start_matches('.').to_ascii_lowercase()
@@ -29,8 +33,8 @@ pub fn supported_targets(ext: &str) -> Vec<&'static str> {
         return Vec::new();
     }
 
-    if IMAGE_FORMATS.contains(&norm.as_str()) {
-        return IMAGE_FORMATS
+    if IMAGE_EXTS.contains(&norm.as_str()) {
+        let mut targets: Vec<&'static str> = IMAGE_EXTS
             .iter()
             .copied()
             .filter(|&f| {
@@ -41,10 +45,12 @@ pub fn supported_targets(ext: &str) -> Vec<&'static str> {
                 }
             })
             .collect();
+        targets.push("pdf");
+        return targets;
     }
 
-    if DATA_FORMATS.contains(&norm.as_str()) || norm == "yml" {
-        return DATA_FORMATS
+    if DATA_EXTS.contains(&norm.as_str()) || norm == "yml" {
+        return DATA_EXTS
             .iter()
             .copied()
             .filter(|&f| {
@@ -58,19 +64,37 @@ pub fn supported_targets(ext: &str) -> Vec<&'static str> {
     }
 
     match norm.as_str() {
-        "md" | "markdown" => return vec!["html"],
-        "txt" => return vec!["base64", "hex"],
+        "md" | "markdown" => return vec!["html", "txt", "pdf"],
+        "html" | "htm" => return vec!["txt", "pdf"],
+        "txt" => return vec!["base64", "hex", "url"],
         "base64" | "b64" => return vec!["txt"],
         "hex" => return vec!["txt"],
+        "url" => return vec!["txt"],
+        "pdf" => return vec!["txt", "png", "jpg"],
         _ => {}
     }
 
-    if MEDIA_FORMATS.contains(&norm.as_str()) {
-        return MEDIA_FORMATS
+    if VIDEO_EXTS.contains(&norm.as_str()) {
+        let mut targets: Vec<&'static str> = VIDEO_EXTS
             .iter()
             .copied()
             .filter(|&f| f != norm)
             .collect();
+        targets.push("gif");
+        targets.extend_from_slice(AUDIO_EXTS);
+        return targets;
+    }
+
+    if AUDIO_EXTS.contains(&norm.as_str()) {
+        return AUDIO_EXTS
+            .iter()
+            .copied()
+            .filter(|&f| f != norm)
+            .collect();
+    }
+
+    if PANDOC_EXTS.contains(&norm.as_str()) {
+        return vec!["md", "html", "txt", "pdf"];
     }
 
     Vec::new()
@@ -109,11 +133,76 @@ fn image_format_from_ext(ext: &str) -> Option<ImageFormat> {
         "gif" => Some(ImageFormat::Gif),
         "ico" => Some(ImageFormat::Ico),
         "tiff" => Some(ImageFormat::Tiff),
+        "tga" => Some(ImageFormat::Tga),
+        "qoi" => Some(ImageFormat::Qoi),
+        "pnm" | "ppm" | "pgm" | "pbm" => Some(ImageFormat::Pnm),
         _ => None,
     }
 }
 
+fn convert_image_to_pdf(source: &Path, out_path: &Path) -> Result<(), String> {
+    let img = image::open(source)
+        .map_err(|e| format!("Failed to open image {}: {e}", source.display()))?;
+    let rgb = img.to_rgb8();
+    let (w, h) = rgb.dimensions();
+    let raw = rgb.into_raw();
+
+    let mut pdf = Vec::with_capacity(raw.len() + 1024);
+    pdf.extend_from_slice(b"%PDF-1.4\n");
+
+    let mut offsets = [0usize; 6];
+
+    offsets[1] = pdf.len();
+    pdf.extend_from_slice(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+
+    offsets[2] = pdf.len();
+    pdf.extend_from_slice(b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n");
+
+    offsets[3] = pdf.len();
+    pdf.extend_from_slice(
+        format!(
+            "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {w} {h}] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>\nendobj\n"
+        )
+        .as_bytes(),
+    );
+
+    offsets[4] = pdf.len();
+    pdf.extend_from_slice(
+        format!(
+            "4 0 obj\n<< /Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length {} >>\nstream\n",
+            raw.len()
+        )
+        .as_bytes(),
+    );
+    pdf.extend_from_slice(&raw);
+    pdf.extend_from_slice(b"\nendstream\nendobj\n");
+
+    let content_stream = format!("q {w} 0 0 {h} 0 0 cm /Im0 Do Q");
+    offsets[5] = pdf.len();
+    pdf.extend_from_slice(
+        format!(
+            "5 0 obj\n<< /Length {} >>\nstream\n{content_stream}\nendstream\nendobj\n",
+            content_stream.len()
+        )
+        .as_bytes(),
+    );
+
+    let xref_offset = pdf.len();
+    pdf.extend_from_slice(b"xref\n0 6\n0000000000 65535 f \n");
+    for &off in &offsets[1..] {
+        pdf.extend_from_slice(format!("{off:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(
+        format!("trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n").as_bytes(),
+    );
+
+    fs::write(out_path, pdf).map_err(|e| format!("Failed to write PDF {}: {e}", out_path.display()))
+}
+
 fn convert_image(source: &Path, out_path: &Path, target_ext: &str) -> Result<(), String> {
+    if target_ext == "pdf" {
+        return convert_image_to_pdf(source, out_path);
+    }
     let fmt = image_format_from_ext(target_ext)
         .ok_or_else(|| format!("Unsupported image target format: {target_ext}"))?;
     let img = image::open(source)
@@ -141,15 +230,19 @@ fn parse_data_to_json(source: &Path, src_ext: &str) -> Result<serde_json::Value,
                 toml::from_str(&content).map_err(|e| format!("Invalid TOML: {e}"))?;
             serde_json::to_value(val).map_err(|e| format!("TOML conversion error: {e}"))
         }
-        "csv" => {
-            let mut reader = csv::Reader::from_reader(content.as_bytes());
+        "csv" | "tsv" => {
+            let delimiter = if src_ext == "tsv" { b'\t' } else { b',' };
+            let label = src_ext.to_ascii_uppercase();
+            let mut reader = csv::ReaderBuilder::new()
+                .delimiter(delimiter)
+                .from_reader(content.as_bytes());
             let headers = reader
                 .headers()
-                .map_err(|e| format!("Invalid CSV headers: {e}"))?
+                .map_err(|e| format!("Invalid {label} headers: {e}"))?
                 .clone();
             let mut rows = Vec::new();
             for result in reader.records() {
-                let record = result.map_err(|e| format!("Invalid CSV row: {e}"))?;
+                let record = result.map_err(|e| format!("Invalid {label} row: {e}"))?;
                 let mut obj = serde_json::Map::new();
                 for (i, header) in headers.iter().enumerate() {
                     let val = record.get(i).unwrap_or("");
@@ -176,20 +269,25 @@ fn json_scalar_to_string(val: &serde_json::Value) -> String {
     }
 }
 
-fn write_json_as_csv(val: &serde_json::Value, out_path: &Path) -> Result<(), String> {
+fn write_json_as_delimited(
+    val: &serde_json::Value,
+    out_path: &Path,
+    delimiter: u8,
+    label: &str,
+) -> Result<(), String> {
     let rows = val
         .as_array()
-        .ok_or_else(|| "CSV export requires a JSON/YAML/TOML array of flat objects".to_string())?;
+        .ok_or_else(|| format!("{label} export requires a JSON/YAML/TOML array of flat objects"))?;
     if rows.is_empty() {
-        return Err("Cannot export empty array to CSV".to_string());
+        return Err(format!("Cannot export empty array to {label}"));
     }
 
     let mut header_set = BTreeSet::new();
     let mut headers = Vec::new();
     for row in rows {
-        let obj = row
-            .as_object()
-            .ok_or_else(|| "CSV export requires every array element to be an object".to_string())?;
+        let obj = row.as_object().ok_or_else(|| {
+            format!("{label} export requires every array element to be an object")
+        })?;
         for key in obj.keys() {
             if header_set.insert(key.clone()) {
                 headers.push(key.clone());
@@ -197,11 +295,13 @@ fn write_json_as_csv(val: &serde_json::Value, out_path: &Path) -> Result<(), Str
         }
     }
 
-    let mut writer = csv::Writer::from_path(out_path)
-        .map_err(|e| format!("Failed to create CSV {}: {e}", out_path.display()))?;
+    let mut writer = csv::WriterBuilder::new()
+        .delimiter(delimiter)
+        .from_path(out_path)
+        .map_err(|e| format!("Failed to create {label} {}: {e}", out_path.display()))?;
     writer
         .write_record(&headers)
-        .map_err(|e| format!("Failed to write CSV headers: {e}"))?;
+        .map_err(|e| format!("Failed to write {label} headers: {e}"))?;
 
     for row in rows {
         let obj = row.as_object().expect("validated above");
@@ -211,12 +311,12 @@ fn write_json_as_csv(val: &serde_json::Value, out_path: &Path) -> Result<(), Str
             .collect();
         writer
             .write_record(&record)
-            .map_err(|e| format!("Failed to write CSV row: {e}"))?;
+            .map_err(|e| format!("Failed to write {label} row: {e}"))?;
     }
 
     writer
         .flush()
-        .map_err(|e| format!("Failed to flush CSV {}: {e}", out_path.display()))
+        .map_err(|e| format!("Failed to flush {label} {}: {e}", out_path.display()))
 }
 
 fn convert_data(
@@ -235,7 +335,8 @@ fn convert_data(
         "toml" => {
             toml::to_string_pretty(&val).map_err(|e| format!("TOML serialization error: {e}"))?
         }
-        "csv" => return write_json_as_csv(&val, out_path),
+        "csv" => return write_json_as_delimited(&val, out_path, b',', "CSV"),
+        "tsv" => return write_json_as_delimited(&val, out_path, b'\t', "TSV"),
         _ => return Err(format!("Unsupported data target format: {target_ext}")),
     };
     fs::write(out_path, serialized)
@@ -259,6 +360,101 @@ fn decode_hex(input: &str) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
+fn strip_html_to_text(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut in_tag = false;
+    let mut skip_block: Option<&str> = None;
+    let lower = html.to_ascii_lowercase();
+    let bytes = html.as_bytes();
+    let lower_bytes = lower.as_bytes();
+    let mut i = 0;
+
+    while i < bytes.len() {
+        if let Some(end_tag) = skip_block {
+            if lower_bytes[i..].starts_with(end_tag.as_bytes()) {
+                i += end_tag.len();
+                skip_block = None;
+            } else {
+                i += 1;
+            }
+            continue;
+        }
+
+        if bytes[i] == b'<' {
+            if lower_bytes[i..].starts_with(b"<script") {
+                skip_block = Some("</script>");
+                i += 7;
+                continue;
+            }
+            if lower_bytes[i..].starts_with(b"<style") {
+                skip_block = Some("</style>");
+                i += 6;
+                continue;
+            }
+            in_tag = true;
+            if lower_bytes[i..].starts_with(b"<br")
+                || lower_bytes[i..].starts_with(b"</p")
+                || lower_bytes[i..].starts_with(b"</div")
+                || lower_bytes[i..].starts_with(b"</li")
+                || lower_bytes[i..].starts_with(b"</h")
+            {
+                out.push('\n');
+            }
+            i += 1;
+            continue;
+        }
+
+        if in_tag {
+            if bytes[i] == b'>' {
+                in_tag = false;
+            }
+            i += 1;
+            continue;
+        }
+
+        let ch = html[i..].chars().next().unwrap();
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+
+    let decoded = out
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&nbsp;", " ");
+
+    decoded
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn convert_via_pandoc(source: &Path, out_path: &Path) -> Result<(), String> {
+    let output = Command::new("pandoc")
+        .arg(source)
+        .arg("-o")
+        .arg(out_path)
+        .output()
+        .map_err(|e| {
+            if e.kind() == ErrorKind::NotFound {
+                "pandoc was not found on PATH. Install pandoc to convert document files."
+                    .to_string()
+            } else {
+                format!("Failed to run pandoc: {e}")
+            }
+        })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("pandoc conversion failed: {}", stderr.trim()));
+    }
+    Ok(())
+}
+
 fn convert_text(
     source: &Path,
     out_path: &Path,
@@ -273,6 +469,40 @@ fn convert_text(
             let mut html = String::new();
             pulldown_cmark::html::push_html(&mut html, parser);
             fs::write(out_path, html)
+                .map_err(|e| format!("Failed to write {}: {e}", out_path.display()))
+        }
+        ("md" | "markdown", "txt") => {
+            let md = fs::read_to_string(source)
+                .map_err(|e| format!("Failed to read {}: {e}", source.display()))?;
+            let parser = pulldown_cmark::Parser::new(&md);
+            let mut txt = String::new();
+            for event in parser {
+                match event {
+                    pulldown_cmark::Event::Text(t) | pulldown_cmark::Event::Code(t) => {
+                        txt.push_str(&t);
+                    }
+                    pulldown_cmark::Event::SoftBreak | pulldown_cmark::Event::HardBreak => {
+                        txt.push('\n');
+                    }
+                    pulldown_cmark::Event::End(
+                        pulldown_cmark::TagEnd::Paragraph
+                        | pulldown_cmark::TagEnd::Heading(_)
+                        | pulldown_cmark::TagEnd::Item,
+                    ) => {
+                        txt.push('\n');
+                    }
+                    _ => {}
+                }
+            }
+            fs::write(out_path, txt.trim_end())
+                .map_err(|e| format!("Failed to write {}: {e}", out_path.display()))
+        }
+        ("md" | "markdown" | "html" | "htm", "pdf") => convert_via_pandoc(source, out_path),
+        ("html" | "htm", "txt") => {
+            let html = fs::read_to_string(source)
+                .map_err(|e| format!("Failed to read {}: {e}", source.display()))?;
+            let txt = strip_html_to_text(&html);
+            fs::write(out_path, txt)
                 .map_err(|e| format!("Failed to write {}: {e}", out_path.display()))
         }
         ("txt", "base64") => {
@@ -305,26 +535,112 @@ fn convert_text(
             fs::write(out_path, decoded)
                 .map_err(|e| format!("Failed to write {}: {e}", out_path.display()))
         }
+        ("txt", "url") => {
+            let content = fs::read_to_string(source)
+                .map_err(|e| format!("Failed to read {}: {e}", source.display()))?;
+            let encoded = percent_encoding::utf8_percent_encode(
+                &content,
+                percent_encoding::NON_ALPHANUMERIC,
+            )
+            .to_string();
+            fs::write(out_path, encoded)
+                .map_err(|e| format!("Failed to write {}: {e}", out_path.display()))
+        }
+        ("url", "txt") => {
+            let content = fs::read_to_string(source)
+                .map_err(|e| format!("Failed to read {}: {e}", source.display()))?;
+            let decoded = percent_encoding::percent_decode_str(content.trim())
+                .decode_utf8()
+                .map_err(|e| format!("Invalid URL-encoded UTF-8: {e}"))?
+                .into_owned();
+            fs::write(out_path, decoded)
+                .map_err(|e| format!("Failed to write {}: {e}", out_path.display()))
+        }
         _ => Err(format!(
             "Unsupported text conversion: {src_ext} -> {target_ext}"
         )),
     }
 }
 
-fn convert_media(source: &Path, out_path: &Path) -> Result<(), String> {
-    let output = Command::new("ffmpeg")
-        .args(["-y", "-i"])
-        .arg(source)
-        .arg(out_path)
-        .output()
-        .map_err(|e| {
-            if e.kind() == ErrorKind::NotFound {
-                "ffmpeg was not found on PATH. Install ffmpeg to convert audio/video files."
-                    .to_string()
-            } else {
-                format!("Failed to run ffmpeg: {e}")
+fn convert_pdf(source: &Path, out_path: &Path, target_ext: &str) -> Result<(), String> {
+    match target_ext {
+        "txt" => match pdf_extract::extract_text(source) {
+            Ok(text) => fs::write(out_path, text)
+                .map_err(|e| format!("Failed to write {}: {e}", out_path.display())),
+            Err(extract_err) => {
+                let output = Command::new("pdftotext")
+                    .arg(source)
+                    .arg(out_path)
+                    .output()
+                    .map_err(|e| {
+                        if e.kind() == ErrorKind::NotFound {
+                            format!(
+                                "PDF text extraction failed ({extract_err}) and pdftotext was not found on PATH."
+                            )
+                        } else {
+                            format!("PDF text extraction failed ({extract_err}); pdftotext error: {e}")
+                        }
+                    })?;
+                if !output.status.success() {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    return Err(format!("pdftotext failed: {}", stderr.trim()));
+                }
+                Ok(())
             }
-        })?;
+        },
+        "png" | "jpg" => {
+            let flag = if target_ext == "png" { "-png" } else { "-jpeg" };
+            let stem_path = out_path.with_extension("");
+            match Command::new("pdftoppm")
+                .args([flag, "-singlefile"])
+                .arg(source)
+                .arg(&stem_path)
+                .output()
+            {
+                Ok(output) if output.status.success() => Ok(()),
+                Ok(output) => {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    Err(format!("pdftoppm failed: {}", stderr.trim()))
+                }
+                Err(e) if e.kind() == ErrorKind::NotFound => {
+                    let magick_out = Command::new("magick")
+                        .arg(source)
+                        .arg(out_path)
+                        .output()
+                        .map_err(|me| {
+                            if me.kind() == ErrorKind::NotFound {
+                                "Neither pdftoppm nor magick was found on PATH. Install Poppler or ImageMagick to render PDFs.".to_string()
+                            } else {
+                                format!("Failed to run magick: {me}")
+                            }
+                        })?;
+                    if !magick_out.status.success() {
+                        let stderr = String::from_utf8_lossy(&magick_out.stderr);
+                        return Err(format!("magick failed: {}", stderr.trim()));
+                    }
+                    Ok(())
+                }
+                Err(e) => Err(format!("Failed to run pdftoppm: {e}")),
+            }
+        }
+        _ => Err(format!("Unsupported PDF target format: {target_ext}")),
+    }
+}
+
+fn convert_media(source: &Path, out_path: &Path, strip_video: bool) -> Result<(), String> {
+    let mut cmd = Command::new("ffmpeg");
+    cmd.args(["-y", "-i"]).arg(source);
+    if strip_video {
+        cmd.arg("-vn");
+    }
+    let output = cmd.arg(out_path).output().map_err(|e| {
+        if e.kind() == ErrorKind::NotFound {
+            "ffmpeg was not found on PATH. Install ffmpeg to convert audio/video files."
+                .to_string()
+        } else {
+            format!("Failed to run ffmpeg: {e}")
+        }
+    })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -360,12 +676,19 @@ pub fn convert_file(source: &Path, target_ext: &str) -> Result<ConvertResult, St
 
     let out_path = build_output_path(source, &target);
 
-    if IMAGE_FORMATS.contains(&src_ext.as_str()) {
+    if IMAGE_EXTS.contains(&src_ext.as_str()) {
         convert_image(source, &out_path, &target)?;
-    } else if DATA_FORMATS.contains(&src_ext.as_str()) || src_ext == "yml" {
+    } else if DATA_EXTS.contains(&src_ext.as_str()) || src_ext == "yml" {
         convert_data(source, &out_path, &src_ext, &target)?;
-    } else if MEDIA_FORMATS.contains(&src_ext.as_str()) {
-        convert_media(source, &out_path)?;
+    } else if VIDEO_EXTS.contains(&src_ext.as_str()) {
+        let strip_video = AUDIO_EXTS.contains(&target.as_str());
+        convert_media(source, &out_path, strip_video)?;
+    } else if AUDIO_EXTS.contains(&src_ext.as_str()) {
+        convert_media(source, &out_path, false)?;
+    } else if src_ext == "pdf" {
+        convert_pdf(source, &out_path, &target)?;
+    } else if PANDOC_EXTS.contains(&src_ext.as_str()) {
+        convert_via_pandoc(source, &out_path)?;
     } else {
         convert_text(source, &out_path, &src_ext, &target)?;
     }
@@ -414,11 +737,20 @@ mod tests {
         assert!(!supported_targets("png").contains(&"png"));
         assert!(!supported_targets("jpg").contains(&"jpeg"));
         assert!(supported_targets(".JSON").contains(&"yaml"));
-        assert_eq!(supported_targets("md"), vec!["html"]);
-        assert_eq!(supported_targets("txt"), vec!["base64", "hex"]);
+        assert_eq!(supported_targets("md"), vec!["html", "txt", "pdf"]);
+        assert_eq!(supported_targets("txt"), vec!["base64", "hex", "url"]);
         assert_eq!(supported_targets("base64"), vec!["txt"]);
         assert_eq!(supported_targets("hex"), vec!["txt"]);
-        assert!(supported_targets("mp4").contains(&"mp3"));
+        assert_eq!(supported_targets("url"), vec!["txt"]);
+        assert_eq!(supported_targets("pdf"), vec!["txt", "png", "jpg"]);
+        let mp4_targets = supported_targets("mp4");
+        assert!(mp4_targets.contains(&"mkv"));
+        assert!(mp4_targets.contains(&"webm"));
+        assert!(mp4_targets.contains(&"gif"));
+        assert!(mp4_targets.contains(&"mp3"));
+        assert!(mp4_targets.contains(&"opus"));
+        assert!(!mp4_targets.contains(&"mp4"));
+        assert!(supported_targets("docx").contains(&"pdf"));
         assert!(supported_targets("unknown").is_empty());
     }
 
@@ -524,5 +856,61 @@ mod tests {
         let missing = dir.path().join("missing.png");
         assert!(convert_file(&missing, "jpg").is_err());
         assert!(convert_file(&src, "png").is_err());
+    }
+
+    #[test]
+    fn convert_tsv_html_url_and_img_to_pdf() {
+        let dir = TempDir::new("ext");
+
+        // TSV <-> JSON
+        let tsv_src = dir.path().join("items.tsv");
+        fs::write(&tsv_src, "id\tname\n1\tAlpha\n2\tBeta\n").unwrap();
+        let json_res = convert_file(&tsv_src, "json").unwrap();
+        let json_text = fs::read_to_string(&json_res.output_path).unwrap();
+        assert!(json_text.contains("Alpha"));
+        assert!(json_text.contains("Beta"));
+        let tsv_back = convert_file(Path::new(&json_res.output_path), "tsv").unwrap();
+        let tsv_back_text = fs::read_to_string(&tsv_back.output_path).unwrap();
+        assert!(tsv_back_text.contains("id\tname"));
+        assert!(tsv_back_text.contains("1\tAlpha"));
+
+        // HTML -> TXT
+        let html_src = dir.path().join("page.html");
+        fs::write(
+            &html_src,
+            "<html><head><style>body{color:red}</style></head><body><h1>Title</h1><p>Hello &amp; world</p></body></html>",
+        )
+        .unwrap();
+        let txt_from_html = convert_file(&html_src, "txt").unwrap();
+        let html_txt = fs::read_to_string(&txt_from_html.output_path).unwrap();
+        assert!(html_txt.contains("Title"));
+        assert!(html_txt.contains("Hello & world"));
+        assert!(!html_txt.contains("color:red"));
+
+        // TXT <-> URL
+        let txt_src = dir.path().join("query.txt");
+        fs::write(&txt_src, "hello world!").unwrap();
+        let url_res = convert_file(&txt_src, "url").unwrap();
+        assert_eq!(
+            fs::read_to_string(&url_res.output_path).unwrap(),
+            "hello%20world%21"
+        );
+        let txt_from_url = convert_file(Path::new(&url_res.output_path), "txt").unwrap();
+        assert_eq!(
+            fs::read_to_string(&txt_from_url.output_path).unwrap(),
+            "hello world!"
+        );
+
+        // IMG -> PDF
+        let png_src = dir.path().join("pic.png");
+        let img = image::RgbaImage::from_pixel(2, 2, image::Rgba([0, 128, 255, 255]));
+        image::DynamicImage::ImageRgba8(img)
+            .save_with_format(&png_src, ImageFormat::Png)
+            .unwrap();
+        let pdf_res = convert_file(&png_src, "pdf").unwrap();
+        assert!(pdf_res.output_path.ends_with("pic.pdf"));
+        let pdf_bytes = fs::read(&pdf_res.output_path).unwrap();
+        assert!(pdf_bytes.starts_with(b"%PDF-1.4"));
+        assert!(pdf_bytes.ends_with(b"%%EOF\n"));
     }
 }
