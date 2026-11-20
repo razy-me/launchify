@@ -86,7 +86,18 @@ fn build_output_path(source: &Path, target_ext: &str) -> PathBuf {
     if !primary.exists() {
         return primary;
     }
-    parent.join(format!("{stem}_converted.{target_ext}"))
+    let converted = parent.join(format!("{stem}_converted.{target_ext}"));
+    if !converted.exists() {
+        return converted;
+    }
+    let mut counter = 2u32;
+    loop {
+        let candidate = parent.join(format!("{stem}_converted_{counter}.{target_ext}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+        counter += 1;
+    }
 }
 
 fn image_format_from_ext(ext: &str) -> Option<ImageFormat> {
@@ -233,6 +244,9 @@ fn convert_data(
 
 fn decode_hex(input: &str) -> Result<Vec<u8>, String> {
     let cleaned: String = input.chars().filter(|c| !c.is_whitespace()).collect();
+    if !cleaned.is_ascii() {
+        return Err("Invalid hex input: contains non-ASCII characters".to_string());
+    }
     if !cleaned.len().is_multiple_of(2) {
         return Err("Invalid hex input: odd number of hex digits".to_string());
     }
@@ -499,6 +513,13 @@ mod tests {
 
         let res = convert_file(&src, "html").unwrap();
         assert!(res.output_path.ends_with("doc_converted.html"));
+
+        let res2 = convert_file(&src, "html").unwrap();
+        assert!(res2.output_path.ends_with("doc_converted_2.html"));
+
+        let hex_non_ascii = dir.path().join("bad.hex");
+        fs::write(&hex_non_ascii, "aéb").unwrap();
+        assert!(convert_file(&hex_non_ascii, "txt").is_err());
 
         let missing = dir.path().join("missing.png");
         assert!(convert_file(&missing, "jpg").is_err());
