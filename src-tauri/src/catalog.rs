@@ -81,6 +81,7 @@ pub fn builtin_catalog() -> Vec<IndexItem> {
         ("shutdown", "Shut Down PC", "power:shutdown", &["power off", "halt", "turn off"]),
         ("signout", "Sign Out", "power:signout", &["logout", "logoff"]),
         ("hibernate", "Hibernate", "power:hibernate", &["deep sleep"]),
+        ("empty_recycle_bin", "Empty Recycle Bin", "power:empty_recycle_bin", &["recycle", "trash", "bin", "clean"]),
     ];
 
     for (id, title, target, kws) in power_actions {
@@ -140,6 +141,9 @@ mod tests {
         assert!(items.iter().any(|i| i.kind == ItemKind::SystemSetting && i.target == "ms-settings:display"));
         assert!(items.iter().any(|i| i.kind == ItemKind::PowerAction && i.target == "power:lock"));
         assert!(items.iter().any(|i| i.kind == ItemKind::PowerAction && i.target == "power:shutdown"));
+        assert!(items.iter().any(|i| i.kind == ItemKind::PowerAction && i.target == "power:hibernate"));
+        assert!(items.iter().any(|i| i.kind == ItemKind::PowerAction && i.target == "power:signout"));
+        assert!(items.iter().any(|i| i.kind == ItemKind::PowerAction && i.target == "power:empty_recycle_bin"));
     }
 
     #[test]

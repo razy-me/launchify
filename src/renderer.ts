@@ -18,6 +18,8 @@ const MODE_BADGE_MAP: Record<PrefixMode, string> = {
   Path: "/",
   Window: "@",
   Convert: "⇄",
+  Kill: "kill",
+  Clipboard: "cb",
 };
 
 const KIND_FALLBACK_GLYPH: Record<ItemKind, string> = {

@@ -63,6 +63,9 @@ pub struct FrecencyStore {
 pub enum ActionKind {
     Primary,
     Secondary,
+    Reveal,
+    CopyPath,
+    RunAsAdmin,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -73,6 +76,8 @@ pub enum PrefixMode {
     Path,
     Window,
     Convert,
+    Kill,
+    Clipboard,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

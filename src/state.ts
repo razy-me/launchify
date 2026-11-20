@@ -15,6 +15,8 @@ export function createInitialState(): LauncherState {
     visible: false,
     querySeq: 0,
     lastHeightPx: IDLE_HEIGHT_PX,
+    actionMenuOpen: false,
+    actionIndex: 0,
   };
 }
 
@@ -57,4 +59,6 @@ export function resetQueryState(state: LauncherState): void {
   state.results = [];
   state.selectedIndex = -1;
   state.querySeq += 1;
+  state.actionMenuOpen = false;
+  state.actionIndex = 0;
 }

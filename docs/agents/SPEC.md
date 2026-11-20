@@ -1,23 +1,10 @@
-# SPEC — Universal File Converter (`convert`)
+# SPEC: Launchify Feature Expansion
 
-## Original Request
-> eine "convert" funktion, dass ich in die Suchleiste "convert" eingebe und wir einen File-Converter haben, wo ich alles mögliche in alles mögliche konvertieren kann
+**Source Blueprint:** `docs/plans/PLAN-feature-expansion.md`
 
 ## Requirements
-- `R1`: Typing `convert` (case-insensitive) or `convert <file_path>` activates `PrefixMode::Convert` and renders an inline converter panel inside the launcher window (auto-resizing height).
-- `R2`: Support drag-and-drop, native file picker, or typed path input, auto-detecting source format by extension.
-- `R3`: Pure-Rust offline conversions:
-  - **Images**: `png`, `jpg`/`jpeg`, `webp`, `bmp`, `gif`, `ico`, `tiff` (via `image` crate).
-  - **Data**: `json` ↔ `yaml` ↔ `toml` ↔ `csv` (array of flat objects for CSV).
-  - **Text/Doc**: `md` → `html` (via `pulldown-cmark`), `txt` ↔ `base64` / `hex`.
-- `R4`: Optional CLI-backed media conversion (`mp4`, `mp3`, `wav`, `webm`, `mkv`, `ogg`, `flac`) via `ffmpeg` on `PATH`, returning a clear error if `ffmpeg` is not installed.
-- `R5`: Output saved alongside source file (`<stem>.<target_ext>`, or `<stem>_converted.<target_ext>` on collision) with status feedback + "Reveal in Explorer" action.
-- `R6`: Suppress `blur` auto-hide while `PrefixMode::Convert` is active so Drag & Drop from Explorer and native file-picker dialogs do not close the launcher.
-
-## Non-Goals
-- Cloud/online conversion APIs (zero-network security rule).
-- Bundled `ffmpeg` binary.
-- Batch folder conversion in v1.
-
-## Assumptions
-- `A1`: Users have `ffmpeg` on `PATH` if they want audio/video conversion; image/data/text conversions work 100% out-of-the-box.
+- **R1 (Power):** Add `empty_recycle_bin`, `hibernate`, and `signout` to `win32/executor.rs` and `catalog.rs` (`builtin_catalog()`).
+- **R2 (Task Killer):** `kill <filter>` lists running processes (PID, name, RAM) and `Enter` terminates the selected PID via Win32.
+- **R3 (Web & Bangs):** Default bangs (`g`, `yt`, `gh`, `ddg`, `wiki`) + user-defined `web_shortcuts` in `config.json`; `<bang> <query>` opens percent-encoded URL.
+- **R4 (Live Currency):** Fetch USD-base rates from `open.er-api.com/v6/latest/USD` on startup (if stale >1h) and on-demand; persist to `%LOCALAPPDATA%\Launchify\currency_rates.json` for offline use.
+- **R5 (Clipboard History):** Background watcher records text clipboard changes (max 50, deduplicated, persisted to `clipboard.json`); `cb <filter>` searches history and `Enter` copies selection back to clipboard.

@@ -77,17 +77,30 @@ where
             let mut debouncer = Debouncer::new();
 
             loop {
-                let tick = Duration::from_millis(250);
-                crossbeam_channel::select! {
-                    recv(stop_rx) -> _ => break,
-                    recv(event_rx) -> msg => {
-                        if msg.is_err() {
-                            break;
+                if debouncer.dirty {
+                    let tick = Duration::from_millis(250);
+                    crossbeam_channel::select! {
+                        recv(stop_rx) -> _ => break,
+                        recv(event_rx) -> msg => {
+                            if msg.is_err() {
+                                break;
+                            }
+                            let now_ms = start.elapsed().as_millis() as u64;
+                            debouncer.record_event(now_ms);
                         }
-                        let now_ms = start.elapsed().as_millis() as u64;
-                        debouncer.record_event(now_ms);
+                        default(tick) => {}
                     }
-                    default(tick) => {}
+                } else {
+                    crossbeam_channel::select! {
+                        recv(stop_rx) -> _ => break,
+                        recv(event_rx) -> msg => {
+                            if msg.is_err() {
+                                break;
+                            }
+                            let now_ms = start.elapsed().as_millis() as u64;
+                            debouncer.record_event(now_ms);
+                        }
+                    }
                 }
 
                 let now_ms = start.elapsed().as_millis() as u64;

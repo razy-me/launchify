@@ -1,6 +1,9 @@
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufReader, BufWriter, Write};
 use std::path::Path;
+
+use serde::{Deserialize, Serialize};
 
 use crate::model::{FrecencyStore, IndexSnapshot, INDEX_SNAPSHOT_VERSION};
 
@@ -145,6 +148,44 @@ pub fn save_frecency_atomic(path: &Path, store: &FrecencyStore) -> Result<(), St
     write_atomic(path, &json)
 }
 
+/// Cached USD-base currency exchange rates persisted to `currency_rates.json`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CurrencyCache {
+    pub updated_at_unix: u64,
+    pub rates: HashMap<String, f64>,
+}
+
+/// Loads `CurrencyCache` from `path`, returning `None` if missing or corrupt.
+pub fn load_currency_cache(path: &Path) -> Option<CurrencyCache> {
+    if !path.exists() {
+        return None;
+    }
+
+    let Ok(raw) = fs::read_to_string(path) else {
+        tracing::warn!(path = %path.display(), "failed to read currency cache; ignoring");
+        return None;
+    };
+
+    match serde_json::from_str(&raw) {
+        Ok(cache) => Some(cache),
+        Err(e) => {
+            tracing::warn!(
+                path = %path.display(),
+                error = %e,
+                "corrupt currency cache; ignoring"
+            );
+            None
+        }
+    }
+}
+
+/// Atomically persists `CurrencyCache` as JSON to `path`.
+pub fn save_currency_cache_atomic(path: &Path, cache: &CurrencyCache) -> Result<(), String> {
+    let json = serde_json::to_vec_pretty(cache)
+        .map_err(|e| format!("failed to serialize currency cache: {e}"))?;
+    write_atomic(path, &json)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -271,6 +312,29 @@ mod tests {
 
         let snap = load_index(&index_path).unwrap();
         assert!(snap.items.is_empty());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn currency_cache_round_trip_and_missing() {
+        let dir = temp_dir("currency_cache");
+        let cache_path = dir.join("currency_rates.json");
+
+        assert!(load_currency_cache(&cache_path).is_none());
+
+        let mut rates = HashMap::new();
+        rates.insert("USD".to_string(), 1.0);
+        rates.insert("EUR".to_string(), 0.92);
+        rates.insert("GBP".to_string(), 0.79);
+        let cache = CurrencyCache {
+            updated_at_unix: 1_700_000_000,
+            rates,
+        };
+
+        save_currency_cache_atomic(&cache_path, &cache).unwrap();
+        let loaded = load_currency_cache(&cache_path).expect("expected cached currency rates");
+        assert_eq!(loaded, cache);
 
         let _ = fs::remove_dir_all(&dir);
     }

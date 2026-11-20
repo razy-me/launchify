@@ -106,9 +106,12 @@ pub fn typo_fuzzy_score(query: &str, title: &str) -> Option<f64> {
     let max_edits = if q_len <= 5 { 1 } else { 2 };
     let mut best_dist: Option<usize> = None;
 
-    let d_full = damerau_levenshtein(q, title);
-    if d_full <= max_edits {
-        best_dist = Some(d_full);
+    let title_len = title.chars().count();
+    if title_len.abs_diff(q_len) <= max_edits {
+        let d_full = damerau_levenshtein(q, title);
+        if d_full <= max_edits {
+            best_dist = Some(d_full);
+        }
     }
 
     for word in title.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()) {
@@ -156,5 +159,13 @@ mod tests {
         assert!(typo_fuzzy_score("Dsicord", "Discord").is_some());
         assert!(typo_fuzzy_score("Vsiual", "Visual Studio Code").is_some());
         assert!(typo_fuzzy_score("xyz", "Discord").is_none());
+    }
+
+    #[test]
+    fn typo_fuzzy_skips_large_length_mismatch() {
+        let long_query = "a".repeat(1000);
+        assert!(typo_fuzzy_score(&long_query, "Discord").is_none());
+        let long_title = "b".repeat(1000);
+        assert!(typo_fuzzy_score("abc", &long_title).is_none());
     }
 }

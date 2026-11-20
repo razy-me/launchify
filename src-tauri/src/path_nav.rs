@@ -42,6 +42,16 @@ fn parse_raw_path(raw: &str) -> (PathBuf, String) {
         trimmed.to_string()
     };
 
+    #[cfg(windows)]
+    let normalized = if normalized.len() == 2
+        && normalized.as_bytes()[0].is_ascii_alphabetic()
+        && normalized.as_bytes()[1] == b':'
+    {
+        format!("{normalized}\\")
+    } else {
+        normalized
+    };
+
     let path = PathBuf::from(&normalized);
     let ends_with_sep = normalized.ends_with('\\') || normalized.ends_with('/');
 
@@ -222,5 +232,17 @@ mod tests {
 
         let file_result = format_autocomplete(Path::new(r"C:\Tools\notes.txt"), false);
         assert_eq!(file_result, r"C:\Tools\notes.txt");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn drive_only_input_resolves_to_drive_root() {
+        let (path1, filter1) = parse_raw_path("/C:");
+        assert_eq!(path1, PathBuf::from(r"C:\"));
+        assert!(filter1.is_empty());
+
+        let (path2, filter2) = parse_raw_path("C:");
+        assert_eq!(path2, PathBuf::from(r"C:\"));
+        assert!(filter2.is_empty());
     }
 }

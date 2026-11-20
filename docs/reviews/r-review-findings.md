@@ -560,3 +560,11 @@ Pass `safe_cli_path(...)` to external tools and spawn with a timeout (killing th
 ### Coverage / Not Reviewed
 - Reviewed: All 40 project source files across Frontend (`src/`, `index.html`), Backend Core/IPC/Storage/Config, Search/Indexer/Navigation, Converter/Inline Tools, and Win32 Layer.
 - Excluded / Not reviewed: Generated Tauri JSON schemas (`src-tauri/gen/`), lockfiles (`package-lock.json`, `Cargo.lock`), `node_modules/`, `dist/`, `target/`, and integration tests (`src-tauri/tests/integration.rs`).
+
+---
+
+## Tier 1 Feature Review: WP-01..WP-05 (2026-11-20)
+- **Scope:** `src-tauri/src/win32/executor.rs`, `src-tauri/src/win32/process.rs`, `src-tauri/src/catalog.rs`, `src-tauri/src/config.rs`, `src-tauri/src/commands.rs`, `src-tauri/src/storage.rs`, `src-tauri/src/app.rs`, `src-tauri/src/clipboard.rs`, `src-tauri/src/model.rs`, `src/types.ts`, `src/renderer.ts`
+- **Static Checks:** `cargo check`, `npm.cmd run typecheck`, `npm.cmd run build` PASSED. `cargo clippy -- -D warnings` has 0 warnings in WP-01..WP-05 (2 pre-existing warnings in `find_files.rs` and `path_nav.rs`).
+- **Findings:** 0 CRITICAL, 0 MAJOR, 0 MINOR, 0 ENHANCEMENT.
+- **Verdict:** APPROVED.

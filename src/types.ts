@@ -11,7 +11,7 @@ export type ItemKind =
   | "InlineResult"
   | "ShellCommand";
 
-export type PrefixMode = "Global" | "Shell" | "Calc" | "Path" | "Window" | "Convert";
+export type PrefixMode = "Global" | "Shell" | "Calc" | "Path" | "Window" | "Convert" | "Kill" | "Clipboard";
 
 export interface ConvertResult {
   outputPath: string;
@@ -41,6 +41,13 @@ export interface QueryResponse {
   results: SearchResult[];
 }
 
+export type ActionKind = "Primary" | "Secondary" | "Reveal" | "CopyPath" | "RunAsAdmin";
+
+export interface ResultAction {
+  label: string;
+  action: ActionKind;
+}
+
 export type ExecuteOutcome =
   | { type: "Launched" }
   | { type: "CopiedToClipboard"; value: string }
@@ -55,4 +62,6 @@ export interface LauncherState {
   visible: boolean;
   querySeq: number;
   lastHeightPx: number;
+  actionMenuOpen: boolean;
+  actionIndex: number;
 }

@@ -49,10 +49,38 @@ impl Default for LaunchifyConfig {
         currency_rates.insert("CAD".into(), 1.39);
         currency_rates.insert("AUD".into(), 1.53);
 
+        let web_shortcuts = vec![
+            WebShortcutConfig {
+                keyword: "g".into(),
+                name: "Google".into(),
+                url_template: "https://www.google.com/search?q={query}".into(),
+            },
+            WebShortcutConfig {
+                keyword: "yt".into(),
+                name: "YouTube".into(),
+                url_template: "https://www.youtube.com/results?search_query={query}".into(),
+            },
+            WebShortcutConfig {
+                keyword: "gh".into(),
+                name: "GitHub".into(),
+                url_template: "https://github.com/search?q={query}".into(),
+            },
+            WebShortcutConfig {
+                keyword: "ddg".into(),
+                name: "DuckDuckGo".into(),
+                url_template: "https://duckduckgo.com/?q={query}".into(),
+            },
+            WebShortcutConfig {
+                keyword: "wiki".into(),
+                name: "Wikipedia".into(),
+                url_template: "https://en.wikipedia.org/wiki/Special:Search?search={query}".into(),
+            },
+        ];
+
         Self {
             curated_folders: Vec::new(),
             custom_workflows: Vec::new(),
-            web_shortcuts: Vec::new(),
+            web_shortcuts,
             currency_rates,
             extra_exclusions: Vec::new(),
             prefix_memory_threshold: DEFAULT_PREFIX_MEMORY_THRESHOLD,

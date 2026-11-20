@@ -19,6 +19,7 @@ pub struct IndexManager {
     snapshot: Arc<ArcSwap<IndexSnapshot>>,
     config: Arc<ArcSwap<LaunchifyConfig>>,
     app_dir: PathBuf,
+    rebuild_lock: Arc<std::sync::Mutex<()>>,
 }
 
 impl IndexManager {
@@ -32,6 +33,7 @@ impl IndexManager {
             snapshot,
             config,
             app_dir,
+            rebuild_lock: Arc::new(std::sync::Mutex::new(())),
         }
     }
 
@@ -44,6 +46,10 @@ impl IndexManager {
     /// `shell:AppsFolder`, and curated folders, swaps it into `ArcSwap`, and
     /// persists `index.bin` atomically.
     pub fn rebuild_now(&self) -> Result<IndexSnapshot, String> {
+        let _guard = self
+            .rebuild_lock
+            .lock()
+            .map_err(|_| "IndexManager rebuild lock poisoned".to_string())?;
         let cfg = self.config.load();
         let filter = ExclusionFilter::new(&cfg.extra_exclusions);
 
@@ -121,6 +127,29 @@ mod tests {
         let built = mgr.rebuild_now().expect("rebuild_now");
         assert!(!built.items.is_empty());
         assert_eq!(snap.load().items.len(), built.items.len());
+        assert!(dir.join("index.bin").is_file());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn concurrent_rebuild_now_is_serialized_and_succeeds() {
+        let dir = std::env::temp_dir().join(format!("launchify_idx_conc_test_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let snap = Arc::new(ArcSwap::from_pointee(IndexSnapshot::default()));
+        let cfg = Arc::new(ArcSwap::from_pointee(LaunchifyConfig::default()));
+        let mgr1 = IndexManager::new(Arc::clone(&snap), cfg, dir.clone());
+        let mgr2 = mgr1.clone();
+
+        let h1 = std::thread::spawn(move || mgr1.rebuild_now());
+        let h2 = std::thread::spawn(move || mgr2.rebuild_now());
+
+        let r1 = h1.join().expect("thread 1").expect("rebuild 1");
+        let r2 = h2.join().expect("thread 2").expect("rebuild 2");
+        assert!(!r1.items.is_empty());
+        assert_eq!(r1.items.len(), r2.items.len());
         assert!(dir.join("index.bin").is_file());
 
         let _ = fs::remove_dir_all(&dir);

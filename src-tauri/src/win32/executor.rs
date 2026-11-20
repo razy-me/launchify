@@ -194,6 +194,29 @@ mod win_impl {
             },
             "restart" => shell_execute("open", "shutdown.exe", Some("/r /t 0"), SW_HIDE),
             "shutdown" => shell_execute("open", "shutdown.exe", Some("/s /t 0"), SW_HIDE),
+            "hibernate" => unsafe {
+                if !windows::Win32::System::Power::SetSuspendState(true, false, false).as_bool() {
+                    return Err("SetSuspendState failed".to_string());
+                }
+                Ok(())
+            },
+            "signout" => unsafe {
+                windows::Win32::System::Shutdown::ExitWindowsEx(
+                    windows::Win32::System::Shutdown::EWX_LOGOFF,
+                    windows::Win32::System::Shutdown::SHUTDOWN_REASON(0),
+                )
+                .map_err(|e| format!("ExitWindowsEx failed: {e}"))
+            },
+            "empty_recycle_bin" => unsafe {
+                windows::Win32::UI::Shell::SHEmptyRecycleBinW(
+                    None,
+                    None,
+                    windows::Win32::UI::Shell::SHERB_NOCONFIRMATION
+                        | windows::Win32::UI::Shell::SHERB_NOPROGRESSUI
+                        | windows::Win32::UI::Shell::SHERB_NOSOUND,
+                )
+                .map_err(|e| format!("SHEmptyRecycleBinW failed: {e}"))
+            },
             other => Err(format!("Unknown power action: {other}")),
         }
     }
@@ -226,6 +249,13 @@ mod win_impl {
             assert!(err_quote.is_err());
             let err_nul = execute_target("C:\\foo\0bar", LaunchMode::RevealInExplorer);
             assert!(err_nul.is_err());
+        }
+
+        #[test]
+        fn system_power_action_rejects_unknown_action() {
+            let err = super::system_power_action("nonexistent_action");
+            assert!(err.is_err());
+            assert!(err.unwrap_err().contains("Unknown power action"));
         }
     }
 }

@@ -1,22 +1,20 @@
-# System Map: Launchify
+# Launchify Architecture Map
 
-## Stack & Architecture
-- **Framework**: Tauri v2 (`launchify v0.1.0`), Rust 2021 edition backend, Vanilla TypeScript + Vite frontend.
-- **Entry Points**:
-  - Backend: `src-tauri/src/main.rs` -> `src-tauri/src/lib.rs` -> `src-tauri/src/app.rs`.
-  - Native Low-Level Hook: `src-tauri/src/win32/hook.rs` (`WH_KEYBOARD_LL` intercepting Copilot key `Win + Shift + F23`).
-  - Native Windows: `src-tauri/src/win32/window.rs` (DPI-aware positioning, transparent window).
-  - Native Window Switcher: `src-tauri/src/win32/switcher.rs` (EnumWindows, focus switching).
-  - Native Executor: `src-tauri/src/win32/executor.rs` (ShellExecuteW, powershell -EncodedCommand, clipboard).
-  - Frontend: `index.html` -> `src/main.ts` -> `src/ipc.ts`, `src/keyboard.ts`, `src/renderer.ts`.
-- **Trust Boundaries**:
-  - Tauri IPC invokes: `query`, `execute`, `autocomplete`, `hide_launcher`, `resize_launcher`, `collapse_to_row`.
-  - Execution sink: `executor.rs` receives `Action` variants (`OpenPath`, `RunCommand`, `Power`, `FocusWindow`, `Copy`).
-  - Hook thread: receives all system-wide keystrokes via Win32 low-level hook.
-- **Shared Modules & Data Structures**:
-  - `src-tauri/src/model.rs`: `LauncherItem`, `Action`, `Category`, `QueryMatch`.
-  - `src-tauri/src/search/engine.rs`: Lock-free `ArcSwap` index search with `nucleo-matcher`.
-  - `src-tauri/src/storage.rs` & `frecency.rs`: JSON on-disk persistence for usage statistics & frecency scoring.
-  - `src-tauri/src/icons.rs`: SHGetFileInfoW icon extraction and caching in `%LOCALAPPDATA%/Launchify/icons/`.
-  - `src-tauri/src/indexer/`: Background indexing, scanning Start Menu / shell:AppsFolder, file watcher.
-  - `src-tauri/src/inline_tools/`: Calculator/eval (`math.rs`), unit converter (`units.rs`), utils (`utils.rs`).
+## Stack
+- **Desktop Framework**: Tauri v2 (`src-tauri/`) + Vite + TypeScript vanilla DOM frontend (`src/`, `index.html`).
+- **OS Target**: Windows (Win32 APIs via `windows` crate for global hotkeys, window management, ShellExecute, icons, window switching).
+- **Persistence**: SQLite/JSON via `src-tauri/src/storage.rs` & `config.rs` (frecency, settings).
+
+## Entry Points & Trust Boundaries
+- **Frontend**: `index.html` -> `src/main.ts` (DOM events, keyboard shortcuts, IPC calls via `src/ipc.ts` to Tauri commands).
+- **Backend**: `src-tauri/src/main.rs` -> `src-tauri/src/lib.rs` (Tauri builder, plugin/tray setup, command registration).
+- **IPC Boundary**: `src-tauri/src/commands.rs` (`#[tauri::command]` handlers invoked by WebView).
+  - Untrusted/user-controlled inputs: search queries, file paths, action kinds, conversion targets, window resize dimensions.
+  - Sinks: `win32/executor.rs` (process execution / ShellExecute / admin elevation), `converter/mod.rs` (file I/O, external tools/conversions), `find_files.rs` / `path_nav.rs` (filesystem traversal), `storage.rs` (DB/file writes).
+- **Global Input Hook**: `src-tauri/src/win32/hook.rs` (Win32 low-level keyboard hook / global shortcut handling).
+- **Background Workers**: `src-tauri/src/indexer/` (directory scanner + file watcher updating shared search index).
+
+## Shared Modules
+- `src-tauri/src/model.rs` <-> `src/types.ts` (IPC DTOs: `SearchResult`, `ActionKind`, `Mode`, etc.)
+- `src-tauri/src/app.rs` (shared `AppState`, mutexes/locks, window visibility lifecycle)
+- `src-tauri/src/config.rs` & `src-tauri/src/storage.rs` (app configuration & frecency persistence)

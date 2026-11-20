@@ -32,9 +32,56 @@ pub fn parse_prefix_mode(raw: &str) -> (PrefixMode, &str) {
         .is_some_and(|p| p.eq_ignore_ascii_case("convert "))
     {
         (PrefixMode::Convert, trimmed[8..].trim_start())
+    } else if trimmed.eq_ignore_ascii_case("kill") {
+        (PrefixMode::Kill, "")
+    } else if trimmed
+        .get(..5)
+        .is_some_and(|p| p.eq_ignore_ascii_case("kill "))
+    {
+        (PrefixMode::Kill, trimmed[5..].trim_start())
+    } else if trimmed.eq_ignore_ascii_case("cb") || trimmed.eq_ignore_ascii_case("clip") {
+        (PrefixMode::Clipboard, "")
+    } else if trimmed
+        .get(..3)
+        .is_some_and(|p| p.eq_ignore_ascii_case("cb "))
+    {
+        (PrefixMode::Clipboard, trimmed[3..].trim_start())
+    } else if trimmed
+        .get(..5)
+        .is_some_and(|p| p.eq_ignore_ascii_case("clip "))
+    {
+        (PrefixMode::Clipboard, trimmed[5..].trim_start())
     } else {
         (PrefixMode::Global, trimmed)
     }
+}
+
+fn match_web_shortcut(
+    raw: &str,
+    shortcuts: &[crate::config::WebShortcutConfig],
+) -> Option<SearchResult> {
+    let trimmed = raw.trim_start();
+    let (bang, rest) = trimmed.split_once(char::is_whitespace)?;
+    let q = rest.trim();
+    if q.is_empty() {
+        return None;
+    }
+    let shortcut = shortcuts
+        .iter()
+        .find(|s| s.keyword.eq_ignore_ascii_case(bang))?;
+    let url = shortcut
+        .url_template
+        .replace("{query}", &percent_encode_query(q));
+    Some(SearchResult {
+        id: format!("web:{url}"),
+        title: format!("Search {} for '{}'", shortcut.name, q),
+        subtitle: url,
+        kind: ItemKind::WebShortcut,
+        icon_path: None,
+        secondary_hint: None,
+        score: 1000.0,
+        autocomplete_text: None,
+    })
 }
 
 fn extract_find_rest(trimmed_raw: &str) -> Option<&str> {
@@ -48,6 +95,45 @@ fn extract_find_rest(trimmed_raw: &str) -> Option<&str> {
 }
 
 /// Evaluates a launcher query across prefix modes, inline tools, and fuzzy search.
+fn load_icon_data_url(icons_dir: &std::path::Path, key: &str) -> Option<String> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+
+    const MAX_ICON_CACHE_ENTRIES: usize = 512;
+    static CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+
+    if let Ok(guard) = cache.lock() {
+        if let Some(cached) = guard.get(key) {
+            return Some(cached.clone());
+        }
+    }
+
+    let p = icons_dir.join(format!("{key}.png"));
+    let bytes = std::fs::read(&p).ok()?;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    let data_url = format!("data:image/png;base64,{b64}");
+
+    if let Ok(mut guard) = cache.lock() {
+        if guard.len() >= MAX_ICON_CACHE_ENTRIES {
+            guard.clear();
+        }
+        guard.insert(key.to_string(), data_url.clone());
+    }
+    Some(data_url)
+}
+
+fn first_line_truncated(text: &str, max_chars: usize) -> String {
+    let first_line = text.lines().next().unwrap_or("").trim();
+    let mut chars = first_line.chars();
+    let truncated: String = chars.by_ref().take(max_chars).collect();
+    if chars.next().is_some() {
+        format!("{truncated}...")
+    } else {
+        truncated
+    }
+}
+
 #[tauri::command]
 pub fn query(raw: String, state: State<'_, AppState>) -> Result<QueryResponse, String> {
     if let Ok(mut last) = state.last_query.lock() {
@@ -142,6 +228,56 @@ pub fn query(raw: String, state: State<'_, AppState>) -> Result<QueryResponse, S
                 inline_preview: None,
             })
         }
+        PrefixMode::Kill => {
+            let needle = rest.to_lowercase();
+            let processes = win32::process::list_processes()?;
+            let results = processes
+                .into_iter()
+                .filter(|p| needle.is_empty() || p.name.to_lowercase().contains(&needle))
+                .take(cfg.max_results)
+                .map(|p| SearchResult {
+                    id: format!("kill:{}", p.pid),
+                    title: format!("{} (PID {})", p.name, p.pid),
+                    subtitle: if p.memory_kb > 0 {
+                        format!("{} MB", p.memory_kb / 1024)
+                    } else {
+                        "Kill process".to_string()
+                    },
+                    kind: ItemKind::ShellCommand,
+                    icon_path: None,
+                    secondary_hint: None,
+                    score: 1.0,
+                    autocomplete_text: None,
+                })
+                .collect();
+            Ok(QueryResponse {
+                mode,
+                results,
+                inline_preview: None,
+            })
+        }
+        PrefixMode::Clipboard => {
+            let entries = state.clipboard_store.search(rest, cfg.max_results);
+            let results = entries
+                .into_iter()
+                .enumerate()
+                .map(|(idx, entry)| SearchResult {
+                    id: format!("cb:{}", entry.id),
+                    title: first_line_truncated(&entry.text, 80),
+                    subtitle: "Clipboard History".to_string(),
+                    kind: ItemKind::InlineResult,
+                    icon_path: None,
+                    secondary_hint: None,
+                    score: 100.0 - idx as f64,
+                    autocomplete_text: None,
+                })
+                .collect();
+            Ok(QueryResponse {
+                mode,
+                results,
+                inline_preview: None,
+            })
+        }
         PrefixMode::Global => {
             let inline_preview = if rest.is_empty() {
                 None
@@ -164,14 +300,12 @@ pub fn query(raw: String, state: State<'_, AppState>) -> Result<QueryResponse, S
             let icons_dir = state.app_dir.join("icons");
             for r in &mut results {
                 if let Some(key) = &r.icon_path {
-                    let p = icons_dir.join(format!("{key}.png"));
-                    if let Ok(bytes) = std::fs::read(&p) {
-                        let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-                        r.icon_path = Some(format!("data:image/png;base64,{b64}"));
-                    } else {
-                        r.icon_path = None;
-                    }
+                    r.icon_path = load_icon_data_url(&icons_dir, key);
                 }
+            }
+            if let Some(web_result) = match_web_shortcut(rest, &cfg.web_shortcuts) {
+                results.insert(0, web_result);
+                results.truncate(cfg.max_results);
             }
             Ok(QueryResponse {
                 mode,
@@ -192,13 +326,29 @@ pub fn execute(
 ) -> Result<ExecuteOutcome, String> {
     let secondary = action == ActionKind::Secondary;
 
-    let outcome = if let Some(cmd) = item_id.strip_prefix("shell:") {
+    let outcome = if let Some(url) = item_id.strip_prefix("web:") {
+        win32::executor::execute_target(url, LaunchMode::Normal)?;
+        ExecuteOutcome::Launched
+    } else if let Some(cmd) = item_id.strip_prefix("shell:") {
         let mode = match action {
             ActionKind::RunAsAdmin => LaunchMode::Elevated,
             ActionKind::Secondary => LaunchMode::ShellTerminal,
             _ => LaunchMode::ShellHidden,
         };
         win32::executor::execute_target(cmd, mode)?;
+        ExecuteOutcome::Launched
+    } else if let Some(cb_id) = item_id.strip_prefix("cb:") {
+        let entry = state
+            .clipboard_store
+            .get_by_id(cb_id)
+            .ok_or_else(|| format!("clipboard entry not found: {cb_id}"))?;
+        win32::executor::copy_text_to_clipboard(&entry.text)?;
+        ExecuteOutcome::CopiedToClipboard { value: entry.text }
+    } else if let Some(pid_str) = item_id.strip_prefix("kill:") {
+        let pid = pid_str
+            .parse::<u32>()
+            .map_err(|_| format!("invalid process id: {pid_str}"))?;
+        win32::process::kill_process(pid)?;
         ExecuteOutcome::Launched
     } else if let Some(hwnd_str) = item_id.strip_prefix("win:") {
         let hwnd = hwnd_str
@@ -559,6 +709,9 @@ mod tests {
         assert_eq!(parse_prefix_mode("convert"), (PrefixMode::Convert, ""));
         assert_eq!(parse_prefix_mode("CONVERT C:\\a.png"), (PrefixMode::Convert, "C:\\a.png"));
         assert_eq!(parse_prefix_mode("convert äöü.png"), (PrefixMode::Convert, "äöü.png"));
+        assert_eq!(parse_prefix_mode("kill"), (PrefixMode::Kill, ""));
+        assert_eq!(parse_prefix_mode("kill chrome"), (PrefixMode::Kill, "chrome"));
+        assert_eq!(parse_prefix_mode("KILL  notepad"), (PrefixMode::Kill, "notepad"));
         assert_eq!(parse_prefix_mode("überprüfen"), (PrefixMode::Global, "überprüfen"));
         assert_eq!(parse_prefix_mode("🚀launch"), (PrefixMode::Global, "🚀launch"));
         assert_eq!(parse_prefix_mode("spotify"), (PrefixMode::Global, "spotify"));
@@ -583,5 +736,25 @@ mod tests {
             build_web_shortcut_url("https://google.com/search?q={query}", "g", "G  rust & tauri"),
             "https://google.com/search?q=rust%20%26%20tauri"
         );
+    }
+
+    #[test]
+    fn bang_matching_and_url_encoding() {
+        let cfg = crate::config::LaunchifyConfig::default();
+        assert_eq!(cfg.web_shortcuts.len(), 5);
+
+        let res = match_web_shortcut("g rust async", &cfg.web_shortcuts).expect("should match g");
+        assert_eq!(res.kind, ItemKind::WebShortcut);
+        assert_eq!(res.title, "Search Google for 'rust async'");
+        assert_eq!(res.subtitle, "https://www.google.com/search?q=rust%20async");
+        assert_eq!(res.id, "web:https://www.google.com/search?q=rust%20async");
+
+        let res_ci = match_web_shortcut("GH  tauri/v2 & more", &cfg.web_shortcuts).expect("case-insensitive");
+        assert_eq!(res_ci.title, "Search GitHub for 'tauri/v2 & more'");
+        assert_eq!(res_ci.subtitle, "https://github.com/search?q=tauri%2Fv2%20%26%20more");
+
+        assert!(match_web_shortcut("g", &cfg.web_shortcuts).is_none());
+        assert!(match_web_shortcut("g   ", &cfg.web_shortcuts).is_none());
+        assert!(match_web_shortcut("unknown query", &cfg.web_shortcuts).is_none());
     }
 }

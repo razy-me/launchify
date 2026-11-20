@@ -1,6 +1,6 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { ConvertResult, ExecuteOutcome, QueryResponse } from "./types";
+import type { ActionKind, ConvertResult, ExecuteOutcome, QueryResponse } from "./types";
 
 export async function queryBackend(input: string): Promise<QueryResponse> {
   return invoke<QueryResponse>("query", { raw: input });
@@ -17,6 +17,16 @@ export async function executeItem(
   });
 }
 
+export async function executeItemWithAction(
+  itemId: string,
+  action: ActionKind
+): Promise<ExecuteOutcome> {
+  return invoke<ExecuteOutcome>("execute", {
+    itemId,
+    action,
+  });
+}
+
 export async function autocompleteQuery(
   raw: string,
   topItemTitle: string | null
@@ -28,8 +38,8 @@ export async function hideLauncher(): Promise<void> {
   return invoke<void>("hide_launcher");
 }
 
-export async function resizeLauncher(heightPx: number): Promise<void> {
-  return invoke<void>("resize_launcher", { height: heightPx });
+export async function resizeLauncher(heightPx: number, widthPx?: number): Promise<void> {
+  return invoke<void>("resize_launcher", { height: heightPx, width: widthPx });
 }
 
 export async function getConvertTargets(sourcePath: string): Promise<string[]> {
