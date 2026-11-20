@@ -47,6 +47,10 @@ export async function revealPath(path: string): Promise<void> {
   return invoke("reveal_path", { path });
 }
 
+export async function pickConvertFile(): Promise<string | null> {
+  return invoke("pick_convert_file");
+}
+
 export async function onLauncherShown(cb: () => void): Promise<UnlistenFn> {
   return listen("launcher://shown", () => cb());
 }

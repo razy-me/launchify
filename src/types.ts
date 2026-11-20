@@ -14,8 +14,8 @@ export type ItemKind =
 export type PrefixMode = "Global" | "Shell" | "Calc" | "Path" | "Window" | "Convert";
 
 export interface ConvertResult {
-  output_path: string;
-  bytes_written: number;
+  outputPath: string;
+  bytesWritten: number;
 }
 
 export interface InlinePreview {

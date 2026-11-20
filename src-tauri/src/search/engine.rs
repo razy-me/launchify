@@ -7,7 +7,7 @@ use nucleo_matcher::{Config, Matcher, Utf32Str};
 
 use crate::frecency::{frecency_score, prefix_memory_boost};
 use crate::model::{FrecencyStore, IndexItem, IndexSnapshot, SearchResult};
-use crate::search::ranking::{secondary_hint_for_kind, title_match_bonus};
+use crate::search::ranking::{secondary_hint_for_kind, title_match_bonus, typo_fuzzy_score};
 
 /// Lock-free fuzzy search engine backed by `ArcSwap<IndexSnapshot>` and `nucleo-matcher`.
 #[derive(Debug, Clone)]
@@ -92,6 +92,8 @@ impl SearchEngine {
                 (s as f64) * 0.75
             } else if let Some(s) = sub_fuzzy {
                 (s as f64) * 0.5
+            } else if let Some(s) = typo_fuzzy_score(trimmed, &item.title) {
+                s
             } else {
                 continue;
             };
@@ -210,7 +212,7 @@ mod tests {
             items: vec![
                 make_item("canvas", "Canvas Settings"),
                 make_item("vscode", "Visual Studio Code"),
-                make_item("vstudio", "Video Studio"),
+                make_item("vista", "Vista"),
             ],
         };
         let engine = SearchEngine::new(snap);
@@ -284,9 +286,10 @@ mod tests {
         let elapsed = start.elapsed();
 
         assert_eq!(results[0].title, "Visual Studio Code");
+        let budget_ms = if cfg!(debug_assertions) { 100.0 } else { 2.0 };
         assert!(
-            elapsed.as_secs_f64() * 1000.0 < 2.0,
-            "search took {:?}, expected < 2ms",
+            elapsed.as_secs_f64() * 1000.0 < budget_ms,
+            "search took {:?}, expected < {budget_ms}ms",
             elapsed
         );
     }

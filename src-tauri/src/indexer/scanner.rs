@@ -117,7 +117,9 @@ mod tests {
 
     #[test]
     fn curated_folder_scans_top_level_and_skips_excluded() {
-        let root = std::env::temp_dir().join(format!("launchify_scan_test_{}", std::process::id()));
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join(".test_tmp")
+            .join(format!("launchify_scan_test_{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join("node_modules")).unwrap();
         fs::create_dir_all(root.join("projects").join("nested_dir")).unwrap();
@@ -141,7 +143,9 @@ mod tests {
 
     #[test]
     fn scan_lnk_dir_initializes_icon_key_to_none() {
-        let root = std::env::temp_dir().join(format!("launchify_lnk_test_{}", std::process::id()));
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join(".test_tmp")
+            .join(format!("launchify_lnk_test_{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         fs::write(root.join("Code.lnk"), "dummy").unwrap();

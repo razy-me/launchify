@@ -118,7 +118,10 @@ fn integration_inline_tools_with_config_rates() {
 
 #[test]
 fn integration_path_nav_with_exclusions() {
-    let dir = temp_test_dir("path_nav");
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join(".test_tmp")
+        .join("integration_path_nav");
+    let _ = fs::remove_dir_all(&dir);
     let visible_dir = dir.join("Projects");
     let hidden_dir = dir.join("node_modules");
     fs::create_dir_all(&visible_dir).unwrap();

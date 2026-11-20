@@ -1,5 +1,5 @@
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { convertFile, getConvertTargets, resolveIconUrl, resizeLauncher, revealPath } from "./ipc";
+import { convertFile, getConvertTargets, pickConvertFile, resolveIconUrl, resizeLauncher, revealPath } from "./ipc";
 import { computeTargetHeight } from "./state";
 import type { ItemKind, LauncherState, PrefixMode, SearchResult } from "./types";
 
@@ -363,13 +363,14 @@ async function refreshConvertTargets(sourcePath: string): Promise<void> {
         "mp3", "wav", "flac", "ogg", "aac", "m4a", "opus", "wma",
       ]);
       const pandocFormats = new Set(["docx", "odt", "rtf", "epub", "rst", "tex"]);
+      const isPandocSource = pandocFormats.has(ext);
       for (const fmt of targets) {
         const opt = document.createElement("option");
         opt.value = fmt;
         const upper = fmt.toUpperCase();
         if (ffmpegFormats.has(fmt)) {
           opt.textContent = `${upper} (ffmpeg)`;
-        } else if (pandocFormats.has(fmt)) {
+        } else if (isPandocSource || ((ext === "md" || ext === "html") && fmt === "pdf")) {
           opt.textContent = `${upper} (pandoc)`;
         } else {
           opt.textContent = upper;
@@ -402,6 +403,9 @@ async function runConvert(): Promise<void> {
   if (!convertPathInputEl || !convertTargetSelectEl || !convertSubmitBtnEl) {
     return;
   }
+  if (convertSubmitBtnEl.disabled) {
+    return;
+  }
   const sourcePath = convertPathInputEl.value.trim().replace(/^["']|["']$/g, "");
   const targetFormat = convertTargetSelectEl.value;
   if (!sourcePath || !targetFormat) {
@@ -413,7 +417,7 @@ async function runConvert(): Promise<void> {
   try {
     const res = await convertFile(sourcePath, targetFormat);
     setConvertStatus(
-      `Saved: ${res.output_path} (${res.bytes_written.toLocaleString()} bytes) `,
+      `Saved: ${res.outputPath} (${(res.bytesWritten ?? 0).toLocaleString()} bytes) `,
       "success"
     );
     if (convertStatusEl) {
@@ -422,7 +426,7 @@ async function runConvert(): Promise<void> {
       revealBtn.className = "convert-reveal-btn";
       revealBtn.textContent = "Reveal in Explorer";
       revealBtn.addEventListener("click", () => {
-        void revealPath(res.output_path);
+        void revealPath(res.outputPath);
       });
       convertStatusEl.appendChild(revealBtn);
     }
@@ -430,7 +434,7 @@ async function runConvert(): Promise<void> {
     const msg = err instanceof Error ? err.message : String(err);
     setConvertStatus(`Error: ${msg}`, "error");
   } finally {
-    convertSubmitBtnEl.disabled = false;
+    convertSubmitBtnEl.disabled = convertTargetSelectEl.disabled || !convertTargetSelectEl.value;
   }
 }
 
@@ -445,7 +449,8 @@ function ensureConvertPanel(launcher: HTMLElement): HTMLElement {
 
   const dropzone = document.createElement("div");
   dropzone.id = "convert-dropzone";
-  dropzone.textContent = "Drop a file here, or paste/browse a path below";
+  dropzone.textContent = "Drop a file here, or click to browse";
+  dropzone.style.cursor = "pointer";
 
   const pathRow = document.createElement("div");
   pathRow.className = "convert-row";
@@ -461,12 +466,7 @@ function ensureConvertPanel(launcher: HTMLElement): HTMLElement {
   filePicker.type = "file";
   filePicker.hidden = true;
 
-  const browseBtn = document.createElement("button");
-  browseBtn.id = "convert-browse-btn";
-  browseBtn.type = "button";
-  browseBtn.textContent = "Browse";
-
-  pathRow.append(pathInput, browseBtn, filePicker);
+  pathRow.append(pathInput, filePicker);
 
   const formatRow = document.createElement("div");
   formatRow.className = "convert-row convert-format-row";
@@ -511,8 +511,16 @@ function ensureConvertPanel(launcher: HTMLElement): HTMLElement {
     void refreshConvertTargets(pathInput.value);
   });
 
-  browseBtn.addEventListener("click", () => {
-    filePicker.click();
+  dropzone.addEventListener("click", () => {
+    void pickConvertFile()
+      .then((selectedPath) => {
+        if (selectedPath) {
+          setConvertSourcePath(selectedPath);
+        }
+      })
+      .catch(() => {
+        filePicker.click();
+      });
   });
 
   filePicker.addEventListener("change", () => {

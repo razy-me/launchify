@@ -389,6 +389,50 @@ pub fn reveal_path(path: String) -> Result<(), String> {
     crate::win32::executor::execute_target(&path, crate::win32::executor::LaunchMode::RevealInExplorer)
 }
 
+/// Opens a native Windows file picker and returns the selected full file path.
+#[tauri::command]
+pub async fn pick_convert_file(window: tauri::Window) -> Result<Option<String>, String> {
+    let _ = window.set_always_on_top(false);
+    let res = tauri::async_runtime::spawn_blocking(|| {
+        #[cfg(windows)]
+        let output = {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            std::process::Command::new("powershell")
+                .creation_flags(CREATE_NO_WINDOW)
+                .args([
+                    "-NoProfile",
+                    "-Sta",
+                    "-Command",
+                    "Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.OpenFileDialog; if ($f.ShowDialog() -eq 'OK') { Write-Output $f.FileName }",
+                ])
+                .output()
+                .map_err(|e| format!("Failed to open file dialog: {e}"))?
+        };
+        #[cfg(not(windows))]
+        let output = std::process::Command::new("zenity")
+            .arg("--file-selection")
+            .output()
+            .map_err(|e| format!("Failed to open file dialog: {e}"))?;
+
+        if !output.status.success() {
+            return Ok(None);
+        }
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if path.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(path))
+        }
+    })
+    .await
+    .map_err(|e| format!("file picker task failed: {e}"));
+    let _ = window.set_always_on_top(true);
+    let _ = window.show();
+    let _ = window.set_focus();
+    res?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

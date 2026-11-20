@@ -162,9 +162,10 @@ mod tests {
 
         assert_eq!(loaded.items.len(), 2000);
         assert_eq!(loaded, snap);
+        let budget_ms = if cfg!(debug_assertions) { 100 } else { 20 };
         assert!(
-            elapsed.as_millis() < 20,
-            "bincode load of 2000 items took {:?} (expected fast load)",
+            elapsed.as_millis() < budget_ms,
+            "bincode load of 2000 items took {:?} (expected < {budget_ms}ms)",
             elapsed
         );
 

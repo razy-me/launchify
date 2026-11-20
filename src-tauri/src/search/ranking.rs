@@ -54,6 +54,81 @@ fn is_word_boundary_match(title_lower: &str, query_lower: &str) -> bool {
     false
 }
 
+/// Optimal String Alignment (restricted Damerau-Levenshtein) distance between two strings (case-insensitive).
+pub fn damerau_levenshtein(a: &str, b: &str) -> usize {
+    let a_chars: Vec<char> = a.chars().map(|c| c.to_ascii_lowercase()).collect();
+    let b_chars: Vec<char> = b.chars().map(|c| c.to_ascii_lowercase()).collect();
+    let n = a_chars.len();
+    let m = b_chars.len();
+    if n == 0 {
+        return m;
+    }
+    if m == 0 {
+        return n;
+    }
+
+    let mut d = vec![vec![0usize; m + 1]; n + 1];
+    for (i, row) in d.iter_mut().enumerate() {
+        row[0] = i;
+    }
+    for (j, cell) in d[0].iter_mut().enumerate() {
+        *cell = j;
+    }
+
+    for i in 1..=n {
+        for j in 1..=m {
+            let cost = if a_chars[i - 1] == b_chars[j - 1] { 0 } else { 1 };
+            let mut val = (d[i - 1][j] + 1)
+                .min(d[i][j - 1] + 1)
+                .min(d[i - 1][j - 1] + cost);
+            if i > 1
+                && j > 1
+                && a_chars[i - 1] == b_chars[j - 2]
+                && a_chars[i - 2] == b_chars[j - 1]
+            {
+                val = val.min(d[i - 2][j - 2] + 1);
+            }
+            d[i][j] = val;
+        }
+    }
+    d[n][m]
+}
+
+/// Returns a fallback fuzzy score when `query` has typos/transpositions relative to `title`
+/// (e.g. `"Dsicord"` -> `"Discord"`). Returns `None` for queries shorter than 3 chars.
+pub fn typo_fuzzy_score(query: &str, title: &str) -> Option<f64> {
+    let q = query.trim();
+    let q_len = q.chars().count();
+    if q_len < 3 {
+        return None;
+    }
+
+    let max_edits = if q_len <= 5 { 1 } else { 2 };
+    let mut best_dist: Option<usize> = None;
+
+    let d_full = damerau_levenshtein(q, title);
+    if d_full <= max_edits {
+        best_dist = Some(d_full);
+    }
+
+    for word in title.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()) {
+        let w_len = word.chars().count();
+        if w_len.abs_diff(q_len) > max_edits {
+            continue;
+        }
+        let d_word = damerau_levenshtein(q, word);
+        if d_word <= max_edits {
+            best_dist = Some(best_dist.map_or(d_word, |prev| prev.min(d_word)));
+        }
+    }
+
+    best_dist.map(|dist| match dist {
+        0 => 400.0,
+        1 => 250.0,
+        _ => 120.0,
+    })
+}
+
 /// Return a short secondary action hint for the item kind, if applicable.
 pub fn secondary_hint_for_kind(kind: ItemKind) -> Option<String> {
     match kind {
@@ -74,5 +149,12 @@ mod tests {
         assert!(title_match_bonus("Visual Studio Code", "vs") >= 1_500.0);
         assert!(title_match_bonus("Visual Studio Code", "studio") >= 800.0);
         assert_eq!(title_match_bonus("Canvas Settings", "vs"), 0.0);
+    }
+
+    #[test]
+    fn typo_fuzzy_matches_transpositions_and_typos() {
+        assert!(typo_fuzzy_score("Dsicord", "Discord").is_some());
+        assert!(typo_fuzzy_score("Vsiual", "Visual Studio Code").is_some());
+        assert!(typo_fuzzy_score("xyz", "Discord").is_none());
     }
 }

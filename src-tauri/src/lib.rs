@@ -53,6 +53,7 @@ pub fn run() {
             commands::get_convert_targets,
             commands::convert_file_cmd,
             commands::reveal_path,
+            commands::pick_convert_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

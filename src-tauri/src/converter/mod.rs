@@ -603,8 +603,10 @@ fn convert_pdf(source: &Path, out_path: &Path, target_ext: &str) -> Result<(), S
                     Err(format!("pdftoppm failed: {}", stderr.trim()))
                 }
                 Err(e) if e.kind() == ErrorKind::NotFound => {
+                    let mut source_page0 = source.as_os_str().to_os_string();
+                    source_page0.push("[0]");
                     let magick_out = Command::new("magick")
-                        .arg(source)
+                        .arg(&source_page0)
                         .arg(out_path)
                         .output()
                         .map_err(|me| {

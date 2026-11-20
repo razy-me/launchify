@@ -188,7 +188,9 @@ mod tests {
 
     #[test]
     fn browse_and_complete_respect_exclusions() {
-        let temp = std::env::temp_dir().join("launchify_wp02_path_nav_test");
+        let temp = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join(".test_tmp")
+            .join("launchify_wp02_path_nav_test");
         let _ = fs::remove_dir_all(&temp);
         fs::create_dir_all(temp.join("alpha_dir")).unwrap();
         fs::create_dir_all(temp.join("node_modules")).unwrap();

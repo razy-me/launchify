@@ -44,11 +44,15 @@ export function attachKeyboardFlow(
     }
 
     if (e.key === "Enter") {
-      e.preventDefault();
       if (state.mode === "Convert") {
+        if (document.activeElement instanceof HTMLButtonElement) {
+          return;
+        }
+        e.preventDefault();
         window.dispatchEvent(new CustomEvent("launchify:convert-submit"));
         return;
       }
+      e.preventDefault();
       const secondary = e.shiftKey || e.ctrlKey;
       handlers.onExecute(secondary);
       return;
