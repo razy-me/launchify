@@ -127,42 +127,44 @@ fn extract_png_for_target(target: &str) -> Option<Vec<u8>> {
         };
 
         let mut rgba_out: Option<Vec<u8>> = None;
-        if got_obj && bmp.bmWidth > 0 && bmp.bmHeight > 0 {
+        if got_obj && bmp.bmWidth > 0 && bmp.bmHeight > 0 && bmp.bmWidth <= 1024 && bmp.bmHeight <= 1024 {
             let w = bmp.bmWidth as u32;
             let h = bmp.bmHeight as u32;
-            let hdc = CreateCompatibleDC(None);
-            if !hdc.is_invalid() {
-                let old = SelectObject(hdc, icon_info.hbmColor);
-                let mut bi = BITMAPINFO {
-                    bmiHeader: BITMAPINFOHEADER {
-                        biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-                        biWidth: w as i32,
-                        biHeight: -(h as i32), // top-down
-                        biPlanes: 1,
-                        biBitCount: 32,
-                        biCompression: BI_RGB.0,
+            if let Some(buf_len) = (w as usize).checked_mul(h as usize).and_then(|n| n.checked_mul(4)) {
+                let hdc = CreateCompatibleDC(None);
+                if !hdc.is_invalid() {
+                    let old = SelectObject(hdc, icon_info.hbmColor);
+                    let mut bi = BITMAPINFO {
+                        bmiHeader: BITMAPINFOHEADER {
+                            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                            biWidth: w as i32,
+                            biHeight: -(h as i32), // top-down
+                            biPlanes: 1,
+                            biBitCount: 32,
+                            biCompression: BI_RGB.0,
+                            ..Default::default()
+                        },
                         ..Default::default()
-                    },
-                    ..Default::default()
-                };
-                let mut bgra = vec![0u8; (w * h * 4) as usize];
-                let lines = GetDIBits(
-                    hdc,
-                    icon_info.hbmColor,
-                    0,
-                    h,
-                    Some(bgra.as_mut_ptr() as *mut _),
-                    &mut bi,
-                    DIB_RGB_COLORS,
-                );
-                SelectObject(hdc, old);
-                let _ = DeleteDC(hdc);
+                    };
+                    let mut bgra = vec![0u8; buf_len];
+                    let lines = GetDIBits(
+                        hdc,
+                        icon_info.hbmColor,
+                        0,
+                        h,
+                        Some(bgra.as_mut_ptr() as *mut _),
+                        &mut bi,
+                        DIB_RGB_COLORS,
+                    );
+                    SelectObject(hdc, old);
+                    let _ = DeleteDC(hdc);
 
-                if lines > 0 {
-                    for px in bgra.as_chunks_mut::<4>().0 {
-                        px.swap(0, 2); // BGRA -> RGBA
+                    if lines > 0 {
+                        for px in bgra.as_chunks_mut::<4>().0 {
+                            px.swap(0, 2); // BGRA -> RGBA
+                        }
+                        rgba_out = Some(encode_rgba_png(w, h, &bgra));
                     }
-                    rgba_out = Some(encode_rgba_png(w, h, &bgra));
                 }
             }
         }

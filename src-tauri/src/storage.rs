@@ -29,8 +29,33 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     }
 
     #[cfg(windows)]
-    let _ = fs::remove_file(path);
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows::core::PCWSTR;
+        use windows::Win32::Storage::FileSystem::{
+            MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+        };
+        let src: Vec<u16> = tmp_path.as_os_str().encode_wide().chain(Some(0)).collect();
+        let dst: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+        let res = unsafe {
+            MoveFileExW(
+                PCWSTR(src.as_ptr()),
+                PCWSTR(dst.as_ptr()),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+            )
+        };
+        if let Err(e) = res {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(format!(
+                "failed to replace {} -> {}: {e}",
+                tmp_path.display(),
+                path.display()
+            ));
+        }
+        Ok(())
+    }
 
+    #[cfg(not(windows))]
     fs::rename(&tmp_path, path).map_err(|e| {
         let _ = fs::remove_file(&tmp_path);
         format!(
@@ -54,7 +79,14 @@ pub fn load_index(path: &Path) -> Result<IndexSnapshot, String> {
         .map_err(|e| format!("failed to open index {}: {e}", path.display()))?;
     let reader = BufReader::new(file);
 
-    match bincode::deserialize_from::<_, IndexSnapshot>(reader) {
+    use bincode::Options;
+    const MAX_INDEX_BYTES: u64 = 64 * 1024 * 1024;
+    match bincode::DefaultOptions::new()
+        .with_fixint_encoding()
+        .allow_trailing_bytes()
+        .with_limit(MAX_INDEX_BYTES)
+        .deserialize_from::<_, IndexSnapshot>(reader)
+    {
         Ok(snap) if snap.version == INDEX_SNAPSHOT_VERSION => Ok(snap),
         Ok(snap) => {
             tracing::warn!(
@@ -223,6 +255,22 @@ mod tests {
 
         write_atomic(&target, b"updated").unwrap();
         assert_eq!(fs::read(&target).unwrap(), b"updated");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_index_rejects_oversized_corrupt_length_prefix() {
+        let dir = temp_dir("oversized_index");
+        let index_path = dir.join("index.bin");
+        // version = 1 (u32 LE), items len = u64::MAX (would OOM without with_limit)
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&INDEX_SNAPSHOT_VERSION.to_le_bytes());
+        bytes.extend_from_slice(&u64::MAX.to_le_bytes());
+        fs::write(&index_path, &bytes).unwrap();
+
+        let snap = load_index(&index_path).unwrap();
+        assert!(snap.items.is_empty());
 
         let _ = fs::remove_dir_all(&dir);
     }

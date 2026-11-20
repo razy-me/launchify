@@ -1,3 +1,4 @@
+use base64::Engine as _;
 use tauri::{AppHandle, LogicalSize, Manager, State};
 
 use crate::app::{self, clamp_launcher_height, now_unix, AppState, LAUNCHER_WIDTH};
@@ -36,19 +37,14 @@ pub fn parse_prefix_mode(raw: &str) -> (PrefixMode, &str) {
     }
 }
 
-fn encode_base64(input: &[u8]) -> String {
-    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
-    for chunk in input.chunks(3) {
-        let b0 = chunk[0] as usize;
-        let b1 = if chunk.len() > 1 { chunk[1] as usize } else { 0 };
-        let b2 = if chunk.len() > 2 { chunk[2] as usize } else { 0 };
-        out.push(TABLE[b0 >> 2] as char);
-        out.push(TABLE[((b0 & 0x03) << 4) | (b1 >> 4)] as char);
-        out.push(if chunk.len() > 1 { TABLE[((b1 & 0x0f) << 2) | (b2 >> 6)] as char } else { '=' });
-        out.push(if chunk.len() > 2 { TABLE[b2 & 0x3f] as char } else { '=' });
+fn extract_find_rest(trimmed_raw: &str) -> Option<&str> {
+    if trimmed_raw.get(..5).is_some_and(|p| p.eq_ignore_ascii_case("find:")) {
+        Some(trimmed_raw[5..].trim_start())
+    } else if trimmed_raw.get(..2).is_some_and(|p| p.eq_ignore_ascii_case("f:")) {
+        Some(trimmed_raw[2..].trim_start())
+    } else {
+        None
     }
-    out
 }
 
 /// Evaluates a launcher query across prefix modes, inline tools, and fuzzy search.
@@ -60,13 +56,7 @@ pub fn query(raw: String, state: State<'_, AppState>) -> Result<QueryResponse, S
 
     let cfg = state.config.load();
     let trimmed_raw = raw.trim_start();
-    let find_rest = if trimmed_raw.len() >= 5 && trimmed_raw[..5].eq_ignore_ascii_case("find:") {
-        Some(trimmed_raw[5..].trim_start())
-    } else if trimmed_raw.len() >= 2 && trimmed_raw[..2].eq_ignore_ascii_case("f:") {
-        Some(trimmed_raw[2..].trim_start())
-    } else {
-        None
-    };
+    let find_rest = extract_find_rest(trimmed_raw);
 
     if let Some(fq) = find_rest {
         let roots = find_files::default_find_roots(&cfg.curated_folders);
@@ -158,23 +148,25 @@ pub fn query(raw: String, state: State<'_, AppState>) -> Result<QueryResponse, S
             } else {
                 inline_tools::evaluate(rest, false, &cfg.currency_rates)
             };
-            let frecency = state
-                .frecency
-                .lock()
-                .map_err(|_| "frecency lock poisoned".to_string())?;
-            let mut results = state.search_engine.search(
-                rest,
-                &frecency,
-                cfg.max_results,
-                cfg.prefix_memory_threshold,
-                now_unix(),
-            );
+            let mut results = {
+                let frecency = state
+                    .frecency
+                    .lock()
+                    .map_err(|_| "frecency lock poisoned".to_string())?;
+                state.search_engine.search(
+                    rest,
+                    &frecency,
+                    cfg.max_results,
+                    cfg.prefix_memory_threshold,
+                    now_unix(),
+                )
+            };
             let icons_dir = state.app_dir.join("icons");
             for r in &mut results {
                 if let Some(key) = &r.icon_path {
                     let p = icons_dir.join(format!("{key}.png"));
                     if let Ok(bytes) = std::fs::read(&p) {
-                        let b64 = encode_base64(&bytes);
+                        let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
                         r.icon_path = Some(format!("data:image/png;base64,{b64}"));
                     } else {
                         r.icon_path = None;
@@ -199,18 +191,6 @@ pub fn execute(
     state: State<'_, AppState>,
 ) -> Result<ExecuteOutcome, String> {
     let secondary = action == ActionKind::Secondary;
-
-    if !item_id.is_empty() && !item_id.starts_with("win:") && !item_id.starts_with("shell:") {
-        let prefix = state
-            .last_query
-            .lock()
-            .map(|q| normalize_prefix(&q))
-            .unwrap_or_default();
-        if let Ok(mut frecency) = state.frecency.lock() {
-            record_selection(&mut frecency, &prefix, &item_id, now_unix());
-            let _ = storage::save_frecency_atomic(&state.app_dir.join("frecency.json"), &frecency);
-        }
-    }
 
     let outcome = if let Some(cmd) = item_id.strip_prefix("shell:") {
         let mode = match action {
@@ -311,6 +291,44 @@ pub fn execute(
                             ExecuteOutcome::Launched
                         }
                     }
+                    ItemKind::Workflow => {
+                        let cfg = state.config.load();
+                        let keyword = item.id.strip_prefix("workflow:").unwrap_or("");
+                        if let Some(wf) = cfg
+                            .custom_workflows
+                            .iter()
+                            .find(|w| w.keyword.eq_ignore_ascii_case(keyword))
+                        {
+                            let full_cmd = build_workflow_command(&wf.command, &wf.args);
+                            let mode = if action == ActionKind::RunAsAdmin {
+                                LaunchMode::Elevated
+                            } else if wf.run_in_terminal || secondary {
+                                LaunchMode::ShellTerminal
+                            } else {
+                                LaunchMode::ShellHidden
+                            };
+                            win32::executor::execute_target(&full_cmd, mode)?;
+                        } else {
+                            let mode = if secondary {
+                                LaunchMode::ShellTerminal
+                            } else {
+                                LaunchMode::ShellHidden
+                            };
+                            win32::executor::execute_target(&item.target, mode)?;
+                        }
+                        ExecuteOutcome::Launched
+                    }
+                    ItemKind::WebShortcut => {
+                        let keyword = item.id.strip_prefix("web:").unwrap_or("");
+                        let last_q = state
+                            .last_query
+                            .lock()
+                            .map(|q| q.clone())
+                            .unwrap_or_default();
+                        let url = build_web_shortcut_url(&item.target, keyword, &last_q);
+                        win32::executor::execute_target(&url, LaunchMode::Normal)?;
+                        ExecuteOutcome::Launched
+                    }
                     _ => {
                         let mode = if secondary {
                             LaunchMode::Elevated
@@ -324,13 +342,78 @@ pub fn execute(
             }
         } else if secondary {
             win32::executor::copy_text_to_clipboard(&item_id)?;
-            ExecuteOutcome::CopiedToClipboard { value: item_id }
+            ExecuteOutcome::CopiedToClipboard { value: item_id.clone() }
         } else {
             return Err(format!("Unknown or unindexed item id: {item_id}"));
         }
     };
 
+    if !item_id.is_empty()
+        && item_id != "__inline__"
+        && !item_id.starts_with("win:")
+        && !item_id.starts_with("shell:")
+        && !item_id.starts_with("copy:")
+    {
+        let prefix = state
+            .last_query
+            .lock()
+            .map(|q| normalize_prefix(&q))
+            .unwrap_or_default();
+        if let Ok(mut frecency) = state.frecency.lock() {
+            record_selection(&mut frecency, &prefix, &item_id, now_unix());
+            let _ = storage::save_frecency_atomic(&state.app_dir.join("frecency.json"), &frecency);
+        }
+    }
+
     Ok(outcome)
+}
+
+fn build_workflow_command(command: &str, args: &[String]) -> String {
+    if args.is_empty() {
+        return command.to_string();
+    }
+    let mut parts = Vec::with_capacity(1 + args.len());
+    parts.push(command.to_string());
+    for arg in args {
+        if arg.contains(' ') || arg.contains('\t') {
+            parts.push(format!("\"{}\"", arg.replace('"', "\\\"")));
+        } else {
+            parts.push(arg.clone());
+        }
+    }
+    parts.join(" ")
+}
+
+fn build_web_shortcut_url(template: &str, keyword: &str, raw_query: &str) -> String {
+    let trimmed = raw_query.trim();
+    let arg = if !keyword.is_empty()
+        && trimmed
+            .get(..keyword.len())
+            .is_some_and(|p| p.eq_ignore_ascii_case(keyword))
+    {
+        trimmed[keyword.len()..].trim_start()
+    } else {
+        trimmed
+    };
+    let encoded = percent_encode_query(arg);
+    template.replace("{query}", &encoded)
+}
+
+fn percent_encode_query(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for byte in input.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char);
+            }
+            b' ' => out.push_str("%20"),
+            _ => {
+                use std::fmt::Write;
+                let _ = write!(out, "%{byte:02X}");
+            }
+        }
+    }
+    out
 }
 
 /// Autocompletes the current query using filesystem path completion or the top result title.
@@ -372,13 +455,16 @@ pub fn collapse_to_row(y_offset: i32, height: u32, app: AppHandle) -> Result<(),
     Ok(())
 }
 
-/// Resizes the launcher window height, clamped to `[56, 520]` logical pixels.
+/// Resizes the launcher window height (clamped to `[56, 520]`) and optional width.
 #[tauri::command]
-pub fn resize_launcher(height: u32, app: AppHandle) -> Result<(), String> {
+pub fn resize_launcher(height: u32, width: Option<u32>, app: AppHandle) -> Result<(), String> {
     let clamped = clamp_launcher_height(height);
+    let target_width = width
+        .unwrap_or(LAUNCHER_WIDTH)
+        .clamp(LAUNCHER_WIDTH, LAUNCHER_WIDTH + 300);
     if let Some(window) = app.get_webview_window("main") {
         window
-            .set_size(LogicalSize::new(LAUNCHER_WIDTH as f64, clamped as f64))
+            .set_size(LogicalSize::new(target_width as f64, clamped as f64))
             .map_err(|e| format!("failed to resize launcher: {e}"))?;
     }
     Ok(())
@@ -431,7 +517,7 @@ pub async fn pick_convert_file(window: tauri::Window) -> Result<Option<String>, 
                     "-NoProfile",
                     "-Sta",
                     "-Command",
-                    "Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.OpenFileDialog; if ($f.ShowDialog() -eq 'OK') { Write-Output $f.FileName }",
+                    "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.OpenFileDialog; if ($f.ShowDialog() -eq 'OK') { Write-Output $f.FileName }",
                 ])
                 .output()
                 .map_err(|e| format!("Failed to open file dialog: {e}"))?
@@ -476,5 +562,26 @@ mod tests {
         assert_eq!(parse_prefix_mode("überprüfen"), (PrefixMode::Global, "überprüfen"));
         assert_eq!(parse_prefix_mode("🚀launch"), (PrefixMode::Global, "🚀launch"));
         assert_eq!(parse_prefix_mode("spotify"), (PrefixMode::Global, "spotify"));
+    }
+
+    #[test]
+    fn extract_find_rest_handles_non_ascii_safely() {
+        assert_eq!(extract_find_rest("aä"), None);
+        assert_eq!(extract_find_rest("🚀"), None);
+        assert_eq!(extract_find_rest("äää"), None);
+        assert_eq!(extract_find_rest("find: report"), Some("report"));
+        assert_eq!(extract_find_rest("F:  notes"), Some("notes"));
+    }
+
+    #[test]
+    fn workflow_command_and_web_shortcut_formatting() {
+        assert_eq!(
+            build_workflow_command("npm", &["run".into(), "dev".into(), "--port 3000".into()]),
+            "npm run dev \"--port 3000\""
+        );
+        assert_eq!(
+            build_web_shortcut_url("https://google.com/search?q={query}", "g", "G  rust & tauri"),
+            "https://google.com/search?q=rust%20%26%20tauri"
+        );
     }
 }

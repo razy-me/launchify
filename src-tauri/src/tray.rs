@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use tauri::image::Image;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::TrayIconBuilder;
@@ -42,12 +40,7 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), String> {
             }
             "reindex" => {
                 if let Some(state) = app.try_state::<AppState>() {
-                    let idx_mgr = Arc::clone(&state.index_manager);
-                    let engine = Arc::clone(&state.search_engine);
-                    std::thread::spawn(move || match idx_mgr.rebuild_now() {
-                        Ok(snap) => engine.update_index(snap),
-                        Err(e) => tracing::warn!("Manual re-index failed: {e}"),
-                    });
+                    let _ = state.watch_tx.try_send(());
                 }
             }
             "quit" => {
