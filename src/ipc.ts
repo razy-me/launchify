@@ -43,6 +43,10 @@ export async function convertFile(
   return invoke<ConvertResult>("convert_file_cmd", { sourcePath, targetFormat });
 }
 
+export async function revealPath(path: string): Promise<void> {
+  return invoke("reveal_path", { path });
+}
+
 export async function onLauncherShown(cb: () => void): Promise<UnlistenFn> {
   return listen("launcher://shown", () => cb());
 }

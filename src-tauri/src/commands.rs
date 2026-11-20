@@ -383,6 +383,12 @@ pub async fn convert_file_cmd(
     .map_err(|e| format!("conversion task failed: {e}"))?
 }
 
+/// Reveals the given file or directory in Windows Explorer.
+#[tauri::command]
+pub fn reveal_path(path: String) -> Result<(), String> {
+    crate::win32::executor::execute_target(&path, crate::win32::executor::LaunchMode::RevealInExplorer)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

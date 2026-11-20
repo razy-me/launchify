@@ -1,5 +1,5 @@
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { convertFile, getConvertTargets, resolveIconUrl, resizeLauncher } from "./ipc";
+import { convertFile, getConvertTargets, resolveIconUrl, resizeLauncher, revealPath } from "./ipc";
 import { computeTargetHeight } from "./state";
 import type { ItemKind, LauncherState, PrefixMode, SearchResult } from "./types";
 
@@ -401,9 +401,19 @@ async function runConvert(): Promise<void> {
   try {
     const res = await convertFile(sourcePath, targetFormat);
     setConvertStatus(
-      `Saved: ${res.output_path} (${res.bytes_written.toLocaleString()} bytes)`,
+      `Saved: ${res.output_path} (${res.bytes_written.toLocaleString()} bytes) `,
       "success"
     );
+    if (convertStatusEl) {
+      const revealBtn = document.createElement("button");
+      revealBtn.type = "button";
+      revealBtn.className = "convert-reveal-btn";
+      revealBtn.textContent = "Reveal in Explorer";
+      revealBtn.addEventListener("click", () => {
+        void revealPath(res.output_path);
+      });
+      convertStatusEl.appendChild(revealBtn);
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     setConvertStatus(`Error: ${msg}`, "error");
