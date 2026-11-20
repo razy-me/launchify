@@ -26,7 +26,10 @@ pub fn parse_prefix_mode(raw: &str) -> (PrefixMode, &str) {
         (PrefixMode::Window, rest.trim_start())
     } else if trimmed.eq_ignore_ascii_case("convert") {
         (PrefixMode::Convert, "")
-    } else if trimmed.len() >= 8 && trimmed[..8].eq_ignore_ascii_case("convert ") {
+    } else if trimmed
+        .get(..8)
+        .is_some_and(|p| p.eq_ignore_ascii_case("convert "))
+    {
         (PrefixMode::Convert, trimmed[8..].trim_start())
     } else {
         (PrefixMode::Global, trimmed)
@@ -392,6 +395,9 @@ mod tests {
         assert_eq!(parse_prefix_mode("@ code"), (PrefixMode::Window, "code"));
         assert_eq!(parse_prefix_mode("convert"), (PrefixMode::Convert, ""));
         assert_eq!(parse_prefix_mode("CONVERT C:\\a.png"), (PrefixMode::Convert, "C:\\a.png"));
+        assert_eq!(parse_prefix_mode("convert äöü.png"), (PrefixMode::Convert, "äöü.png"));
+        assert_eq!(parse_prefix_mode("überprüfen"), (PrefixMode::Global, "überprüfen"));
+        assert_eq!(parse_prefix_mode("🚀launch"), (PrefixMode::Global, "🚀launch"));
         assert_eq!(parse_prefix_mode("spotify"), (PrefixMode::Global, "spotify"));
     }
 }
