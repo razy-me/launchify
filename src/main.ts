@@ -56,6 +56,9 @@ function bootstrap(): void {
     index: number,
     secondary: boolean
   ): Promise<void> => {
+    if (!state.visible) {
+      return;
+    }
     const selected = state.results[index];
     if (selected) {
       const rows = refs.resultsList.querySelectorAll<HTMLElement>(".result-row");
@@ -101,6 +104,9 @@ function bootstrap(): void {
     index: number,
     action: ActionKind
   ): Promise<void> => {
+    if (!state.visible) {
+      return;
+    }
     const selected = state.results[index];
     if (!selected) {
       return;
@@ -167,7 +173,32 @@ function bootstrap(): void {
     renderState(refs, state, handleSelectAndExecute);
   };
 
+  const INACTIVITY_TIMEOUT_MS = 15_000;
+  let inactivityTimer: number | null = null;
+
+  const clearInactivityTimer = (): void => {
+    if (inactivityTimer !== null) {
+      window.clearTimeout(inactivityTimer);
+      inactivityTimer = null;
+    }
+  };
+
+  const resetInactivityTimer = (): void => {
+    clearInactivityTimer();
+    if (!state.visible || state.mode === "Convert") {
+      return;
+    }
+    inactivityTimer = window.setTimeout(() => {
+      inactivityTimer = null;
+      if (state.mode === "Convert") {
+        return;
+      }
+      hide();
+    }, INACTIVITY_TIMEOUT_MS);
+  };
+
   const hide = (): void => {
+    clearInactivityTimer();
     if (!state.visible) {
       return;
     }
@@ -184,7 +215,14 @@ function bootstrap(): void {
     }, 185);
   };
 
+  for (const eventName of ["keydown", "pointerdown", "wheel"] as const) {
+    document.addEventListener(eventName, () => {
+      resetInactivityTimer();
+    });
+  }
+
   refs.input.addEventListener("input", () => {
+    resetInactivityTimer();
     void runQuery(refs.input.value);
   });
 
@@ -197,9 +235,18 @@ function bootstrap(): void {
       void executeSelected(state.selectedIndex, secondary);
     },
     onAutocomplete: () => {
+      const rawAtRequest = refs.input.value;
+      const seqAtRequest = state.querySeq;
       const selected = state.results[state.selectedIndex];
-      void autocompleteQuery(refs.input.value, selected ? selected.title : null)
+      void autocompleteQuery(rawAtRequest, selected ? selected.title : null)
         .then((completed) => {
+          if (
+            !state.visible ||
+            refs.input.value !== rawAtRequest ||
+            state.querySeq !== seqAtRequest
+          ) {
+            return;
+          }
           if (completed !== null && completed !== refs.input.value) {
             refs.input.value = completed;
             refs.input.setSelectionRange(completed.length, completed.length);
@@ -254,6 +301,7 @@ function bootstrap(): void {
   state.visible = true;
   renderVisibility(refs, true);
   renderState(refs, state, handleSelectAndExecute);
+  resetInactivityTimer();
 
   void onLauncherShown(() => {
     if (executeTimer !== null) {
@@ -266,6 +314,7 @@ function bootstrap(): void {
     resetQueryState(state);
     renderVisibility(refs, false);
     void runQuery("");
+    resetInactivityTimer();
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         if (state.visible) {
@@ -278,6 +327,7 @@ function bootstrap(): void {
   });
 
   void onLauncherHidden(() => {
+    clearInactivityTimer();
     state.visible = false;
     renderVisibility(refs, false);
     clearInput();

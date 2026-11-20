@@ -84,6 +84,8 @@ export function renderState(
 
     const panel = ensureConvertPanel(refs.launcher);
     panel.hidden = false;
+    document.body.querySelector(".action-menu")?.remove();
+    refs.resultsList.style.minHeight = "";
 
     const stripped = state.query.replace(/^convert\s*/i, "").trim();
     if (stripped && stripped !== convertLastPrefill) {
@@ -92,9 +94,11 @@ export function renderState(
     }
 
     const targetHeight = 380;
-    if (targetHeight !== state.lastHeightPx) {
+    const targetWidth = 680;
+    if (targetHeight !== state.lastHeightPx || targetWidth !== lastWidthPx) {
       state.lastHeightPx = targetHeight;
-      void resizeLauncher(targetHeight).catch(() => {
+      lastWidthPx = targetWidth;
+      void resizeLauncher(targetHeight, targetWidth).catch(() => {
         // Ignore resize errors when running in browser preview without Tauri
       });
     }
@@ -148,7 +152,7 @@ export function renderState(
       if (existing) {
         existing.dataset.index = String(index);
         existing.classList.toggle("is-selected", isSelected);
-        existing.classList.remove("is-entering");
+        existing.classList.remove("is-entering", "is-launched", "is-green");
         existing.setAttribute("aria-selected", isSelected ? "true" : "false");
         fragment.appendChild(existing);
         const oldTop = prevTops.get(item.id);
@@ -192,28 +196,34 @@ export function renderState(
   }
 
   if (!state.actionMenuOpen) {
-    refs.resultsList.querySelector(".action-menu")?.remove();
+    document.body.querySelector(".action-menu")?.remove();
     refs.resultsList.style.minHeight = "";
   }
 
   syncLauncherHeight(state);
 }
 
+let lastWidthPx = 680;
+
 function syncLauncherHeight(state: LauncherState): void {
   let targetHeight = computeTargetHeight(state.results.length);
+  let hasMenu = false;
   if (state.actionMenuOpen && state.selectedIndex >= 0) {
     const item = state.results[state.selectedIndex];
     if (item) {
       const actions = getActionsForItem(item);
       if (actions.length > 0) {
+        hasMenu = true;
         const menuHeight = actions.length * 32 + 16;
         targetHeight = Math.max(targetHeight, 56 + 9 + menuHeight);
       }
     }
   }
-  if (targetHeight !== state.lastHeightPx) {
+  const targetWidth = hasMenu ? 896 : 680;
+  if (targetHeight !== state.lastHeightPx || targetWidth !== lastWidthPx) {
     state.lastHeightPx = targetHeight;
-    void resizeLauncher(targetHeight).catch(() => {
+    lastWidthPx = targetWidth;
+    void resizeLauncher(targetHeight, targetWidth).catch(() => {
       // Ignore resize errors when running in browser preview without Tauri
     });
   }
@@ -246,7 +256,7 @@ export function renderActionMenu(
   state: LauncherState,
   onExecuteAction: (action: ActionKind) => void
 ): void {
-  const existing = refs.resultsList.querySelector(".action-menu");
+  const existing = document.body.querySelector(".action-menu");
   if (existing) {
     existing.remove();
   }
@@ -279,10 +289,9 @@ export function renderActionMenu(
   menu.className = "action-menu";
   menu.setAttribute("role", "menu");
 
-  const rowTop = state.selectedIndex * 48;
-  const listHeight = Math.max(state.results.length * 48, menuHeight);
-  const maxTop = Math.max(0, listHeight - actions.length * 32 - 8);
-  menu.style.top = `${Math.min(rowTop + 4, maxTop)}px`;
+  const rowTop = 56 + state.selectedIndex * 48;
+  const maxTop = Math.max(56, state.lastHeightPx - actions.length * 32 - 16);
+  menu.style.top = `${Math.min(rowTop, maxTop)}px`;
 
   actions.forEach((act, idx) => {
     const btn = document.createElement("button");
@@ -301,7 +310,7 @@ export function renderActionMenu(
     menu.appendChild(btn);
   });
 
-  refs.resultsList.appendChild(menu);
+  document.body.appendChild(menu);
 }
 
 export function updateSelectionOnly(refs: DomRefs, selectedIndex: number): void {
@@ -387,8 +396,9 @@ function createResultRow(
 
   row.addEventListener("mousedown", (e) => {
     e.preventDefault();
+    const currentIndex = Number(row.dataset.index);
     const secondary = e.shiftKey || e.ctrlKey;
-    onSelectAndExecute(index, secondary);
+    onSelectAndExecute(currentIndex, secondary);
   });
 
   return row;
@@ -520,11 +530,11 @@ async function runConvert(): Promise<void> {
   setConvertStatus("Converting...", "info");
   try {
     const res = await convertFile(sourcePath, targetFormat);
-    setConvertStatus(
-      `Saved: ${res.outputPath} (${(res.bytesWritten ?? 0).toLocaleString()} bytes) `,
-      "success"
-    );
+    setConvertStatus("", "success");
     if (convertStatusEl) {
+      const textSpan = document.createElement("span");
+      textSpan.className = "convert-status-text";
+      textSpan.textContent = `Saved: ${res.outputPath} (${(res.bytesWritten ?? 0).toLocaleString()} bytes)`;
       const revealBtn = document.createElement("button");
       revealBtn.type = "button";
       revealBtn.className = "convert-reveal-btn";
@@ -532,7 +542,7 @@ async function runConvert(): Promise<void> {
       revealBtn.addEventListener("click", () => {
         void revealPath(res.outputPath);
       });
-      convertStatusEl.appendChild(revealBtn);
+      convertStatusEl.append(textSpan, revealBtn);
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
