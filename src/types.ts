@@ -11,7 +11,12 @@ export type ItemKind =
   | "InlineResult"
   | "ShellCommand";
 
-export type PrefixMode = "Global" | "Shell" | "Calc" | "Path" | "Window";
+export type PrefixMode = "Global" | "Shell" | "Calc" | "Path" | "Window" | "Convert";
+
+export interface ConvertResult {
+  output_path: string;
+  bytes_written: number;
+}
 
 export interface InlinePreview {
   display: string;

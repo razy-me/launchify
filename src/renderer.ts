@@ -16,6 +16,7 @@ const MODE_BADGE_MAP: Record<PrefixMode, string> = {
   Calc: "=",
   Path: "/",
   Window: "@",
+  Convert: "⇄",
 };
 
 const KIND_FALLBACK_GLYPH: Record<ItemKind, string> = {
@@ -79,6 +80,22 @@ export function renderState(
   refs.resultsList.classList.toggle("animate-enter", !wasOpen && hasResults);
   refs.resultsList.hidden = !hasResults;
 
+  // FLIP Step 1 (First): capture existing row positions & reuse DOM nodes by item id
+  const prevTops = new Map<string, number>();
+  const existingRows = new Map<string, HTMLElement>();
+  if (wasOpen && hasResults) {
+    refs.resultsList.querySelectorAll<HTMLElement>(".result-row").forEach((row) => {
+      const id = row.dataset.id;
+      if (id) {
+        prevTops.set(id, row.getBoundingClientRect().top);
+        existingRows.set(id, row);
+      }
+    });
+  }
+
+  const reusedMoved: { row: HTMLElement; oldTop: number }[] = [];
+  const enteringRows: HTMLElement[] = [];
+
   refs.resultsList.replaceChildren();
   if (hasResults) {
     const indicator = document.createElement("div");
@@ -93,11 +110,52 @@ export function renderState(
     const fragment = document.createDocumentFragment();
     fragment.appendChild(indicator);
     state.results.forEach((item, index) => {
-      fragment.appendChild(
-        createResultRow(item, index, index === state.selectedIndex, onSelectAndExecute)
-      );
+      const isSelected = index === state.selectedIndex;
+      const existing = existingRows.get(item.id);
+      if (existing) {
+        existing.dataset.index = String(index);
+        existing.classList.toggle("is-selected", isSelected);
+        existing.classList.remove("is-entering");
+        existing.setAttribute("aria-selected", isSelected ? "true" : "false");
+        fragment.appendChild(existing);
+        const oldTop = prevTops.get(item.id);
+        if (oldTop !== undefined) {
+          reusedMoved.push({ row: existing, oldTop });
+        }
+      } else {
+        const row = createResultRow(item, index, isSelected, onSelectAndExecute);
+        row.dataset.id = item.id;
+        if (wasOpen) {
+          row.classList.add("is-entering");
+          enteringRows.push(row);
+        }
+        fragment.appendChild(row);
+      }
     });
     refs.resultsList.appendChild(fragment);
+
+    // FLIP Step 2 & 3 (Last, Invert, Play)
+    if (reusedMoved.length > 0 || enteringRows.length > 0) {
+      for (const { row, oldTop } of reusedMoved) {
+        const newTop = row.getBoundingClientRect().top;
+        const deltaY = oldTop - newTop;
+        if (Math.abs(deltaY) > 0.5) {
+          row.style.transition = "none";
+          row.style.transform = `translateY(${deltaY}px)`;
+        }
+      }
+      requestAnimationFrame(() => {
+        for (const { row } of reusedMoved) {
+          if (row.style.transform) {
+            row.style.transition = "transform 240ms cubic-bezier(0.22, 1, 0.36, 1)";
+            row.style.transform = "";
+          }
+        }
+        for (const row of enteringRows) {
+          row.classList.remove("is-entering");
+        }
+      });
+    }
   }
 
   const targetHeight = computeTargetHeight(state.results.length);
