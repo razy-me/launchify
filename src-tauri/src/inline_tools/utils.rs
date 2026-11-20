@@ -146,6 +146,18 @@ pub fn format_unix_utc(secs: i64) -> String {
     format!("{year:04}-{m:02}-{d:02} {hour:02}:{minute:02}:{second:02} UTC")
 }
 
+fn max_days_in_month(year: i64, month: i64) -> i64 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            let is_leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+            if is_leap { 29 } else { 28 }
+        }
+        _ => 0,
+    }
+}
+
 fn parse_iso_utc(input: &str) -> Option<i64> {
     let s = input.trim().trim_end_matches('Z');
     let (date_part, time_part) = if let Some((d, t)) = s.split_once('T') {
@@ -163,7 +175,7 @@ fn parse_iso_utc(input: &str) -> Option<i64> {
     let year: i64 = d_parts[0].parse().ok()?;
     let month: i64 = d_parts[1].parse().ok()?;
     let day: i64 = d_parts[2].parse().ok()?;
-    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+    if !(1..=12).contains(&month) || !(1..=max_days_in_month(year, month)).contains(&day) {
         return None;
     }
 
@@ -227,5 +239,9 @@ mod tests {
 
         let (unix_str, _, _) = try_eval_util("2023-11-14T22:13:20Z").unwrap();
         assert_eq!(unix_str, "1700000000");
+
+        assert!(parse_iso_utc("2023-02-31").is_none());
+        assert!(parse_iso_utc("2023-02-29").is_none());
+        assert!(parse_iso_utc("2024-02-29").is_some());
     }
 }

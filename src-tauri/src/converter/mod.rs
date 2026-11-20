@@ -2,10 +2,12 @@ use base64::Engine as _;
 use image::ImageFormat;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
-use std::fs;
-use std::io::ErrorKind;
+use std::fmt::Write as _;
+use std::fs::{self, OpenOptions};
+use std::io::{ErrorKind, Read as _};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -100,25 +102,113 @@ pub fn supported_targets(ext: &str) -> Vec<&'static str> {
     Vec::new()
 }
 
-fn build_output_path(source: &Path, target_ext: &str) -> PathBuf {
+const SUBPROCESS_TIMEOUT: Duration = Duration::from_secs(120);
+const MAX_STDERR_BYTES: u64 = 64 * 1024;
+
+fn safe_cli_path(path: &Path) -> PathBuf {
+    fs::canonicalize(path).unwrap_or_else(|_| {
+        if path.is_relative() {
+            Path::new(".").join(path)
+        } else {
+            path.to_path_buf()
+        }
+    })
+}
+
+enum SubprocessError {
+    NotFound,
+    Io(String),
+    TimedOut(Duration),
+    Failed(String),
+}
+
+fn run_command_with_timeout(
+    mut cmd: Command,
+    tool_name: &str,
+    timeout: Duration,
+) -> Result<(), SubprocessError> {
+    cmd.stdout(Stdio::null()).stderr(Stdio::piped());
+    let mut child = cmd.spawn().map_err(|e| {
+        if e.kind() == ErrorKind::NotFound {
+            SubprocessError::NotFound
+        } else {
+            SubprocessError::Io(format!("Failed to run {tool_name}: {e}"))
+        }
+    })?;
+
+    let stderr_handle = child.stderr.take().map(|stderr| {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = stderr.take(MAX_STDERR_BYTES).read_to_end(&mut buf);
+            String::from_utf8_lossy(&buf).trim().to_string()
+        })
+    });
+
+    let start = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if start.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    if let Some(h) = stderr_handle {
+                        let _ = h.join();
+                    }
+                    return Err(SubprocessError::TimedOut(timeout));
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                if let Some(h) = stderr_handle {
+                    let _ = h.join();
+                }
+                return Err(SubprocessError::Io(format!(
+                    "Failed waiting for {tool_name}: {e}"
+                )));
+            }
+        }
+    };
+
+    let stderr = stderr_handle
+        .and_then(|h| h.join().ok())
+        .unwrap_or_default();
+
+    if !status.success() {
+        return Err(SubprocessError::Failed(stderr));
+    }
+    Ok(())
+}
+
+fn try_reserve_path(path: &Path) -> Result<bool, String> {
+    match OpenOptions::new().write(true).create_new(true).open(path) {
+        Ok(_) => Ok(true),
+        Err(e) if e.kind() == ErrorKind::AlreadyExists => Ok(false),
+        Err(e) => Err(format!("Failed to reserve {}: {e}", path.display())),
+    }
+}
+
+fn build_output_path(source: &Path, target_ext: &str) -> Result<PathBuf, String> {
     let parent = source.parent().unwrap_or_else(|| Path::new("."));
     let stem = source
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("output");
     let primary = parent.join(format!("{stem}.{target_ext}"));
-    if !primary.exists() {
-        return primary;
+    if try_reserve_path(&primary)? {
+        return Ok(primary);
     }
     let converted = parent.join(format!("{stem}_converted.{target_ext}"));
-    if !converted.exists() {
-        return converted;
+    if try_reserve_path(&converted)? {
+        return Ok(converted);
     }
     let mut counter = 2u32;
     loop {
         let candidate = parent.join(format!("{stem}_converted_{counter}.{target_ext}"));
-        if !candidate.exists() {
-            return candidate;
+        if try_reserve_path(&candidate)? {
+            return Ok(candidate);
         }
         counter += 1;
     }
@@ -434,25 +524,18 @@ fn strip_html_to_text(html: &str) -> String {
 }
 
 fn convert_via_pandoc(source: &Path, out_path: &Path) -> Result<(), String> {
-    let output = Command::new("pandoc")
-        .arg(source)
+    let mut cmd = Command::new("pandoc");
+    cmd.arg(safe_cli_path(source))
         .arg("-o")
-        .arg(out_path)
-        .output()
-        .map_err(|e| {
-            if e.kind() == ErrorKind::NotFound {
-                "pandoc was not found on PATH. Install pandoc to convert document files."
-                    .to_string()
-            } else {
-                format!("Failed to run pandoc: {e}")
-            }
-        })?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("pandoc conversion failed: {}", stderr.trim()));
-    }
-    Ok(())
+        .arg(safe_cli_path(out_path));
+    run_command_with_timeout(cmd, "pandoc", SUBPROCESS_TIMEOUT).map_err(|e| match e {
+        SubprocessError::NotFound => {
+            "pandoc was not found on PATH. Install pandoc to convert document files.".to_string()
+        }
+        SubprocessError::TimedOut(d) => format!("pandoc timed out after {}s", d.as_secs()),
+        SubprocessError::Failed(stderr) => format!("pandoc conversion failed: {stderr}"),
+        SubprocessError::Io(msg) => msg,
+    })
 }
 
 fn convert_text(
@@ -524,7 +607,10 @@ fn convert_text(
         ("txt", "hex") => {
             let bytes =
                 fs::read(source).map_err(|e| format!("Failed to read {}: {e}", source.display()))?;
-            let encoded: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+            let mut encoded = String::with_capacity(bytes.len() * 2);
+            for b in &bytes {
+                let _ = write!(&mut encoded, "{b:02x}");
+            }
             fs::write(out_path, encoded)
                 .map_err(|e| format!("Failed to write {}: {e}", out_path.display()))
         }
@@ -568,61 +654,53 @@ fn convert_pdf(source: &Path, out_path: &Path, target_ext: &str) -> Result<(), S
             Ok(text) => fs::write(out_path, text)
                 .map_err(|e| format!("Failed to write {}: {e}", out_path.display())),
             Err(extract_err) => {
-                let output = Command::new("pdftotext")
-                    .arg(source)
-                    .arg(out_path)
-                    .output()
-                    .map_err(|e| {
-                        if e.kind() == ErrorKind::NotFound {
-                            format!(
-                                "PDF text extraction failed ({extract_err}) and pdftotext was not found on PATH."
-                            )
-                        } else {
-                            format!("PDF text extraction failed ({extract_err}); pdftotext error: {e}")
+                let mut cmd = Command::new("pdftotext");
+                cmd.arg(safe_cli_path(source)).arg(safe_cli_path(out_path));
+                run_command_with_timeout(cmd, "pdftotext", SUBPROCESS_TIMEOUT).map_err(|e| {
+                    match e {
+                        SubprocessError::NotFound => format!(
+                            "PDF text extraction failed ({extract_err}) and pdftotext was not found on PATH."
+                        ),
+                        SubprocessError::TimedOut(d) => format!(
+                            "PDF text extraction failed ({extract_err}); pdftotext timed out after {}s",
+                            d.as_secs()
+                        ),
+                        SubprocessError::Failed(stderr) => format!("pdftotext failed: {stderr}"),
+                        SubprocessError::Io(msg) => {
+                            format!("PDF text extraction failed ({extract_err}); {msg}")
                         }
-                    })?;
-                if !output.status.success() {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    return Err(format!("pdftotext failed: {}", stderr.trim()));
-                }
-                Ok(())
+                    }
+                })
             }
         },
         "png" | "jpg" => {
             let flag = if target_ext == "png" { "-png" } else { "-jpeg" };
-            let stem_path = out_path.with_extension("");
-            match Command::new("pdftoppm")
-                .args([flag, "-singlefile"])
-                .arg(source)
-                .arg(&stem_path)
-                .output()
-            {
-                Ok(output) if output.status.success() => Ok(()),
-                Ok(output) => {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    Err(format!("pdftoppm failed: {}", stderr.trim()))
-                }
-                Err(e) if e.kind() == ErrorKind::NotFound => {
-                    let mut source_page0 = source.as_os_str().to_os_string();
+            let stem_path = safe_cli_path(out_path).with_extension("");
+            let mut cmd = Command::new("pdftoppm");
+            cmd.args([flag, "-singlefile"])
+                .arg(safe_cli_path(source))
+                .arg(&stem_path);
+            match run_command_with_timeout(cmd, "pdftoppm", SUBPROCESS_TIMEOUT) {
+                Ok(()) => Ok(()),
+                Err(SubprocessError::NotFound) => {
+                    let mut source_page0 = safe_cli_path(source).into_os_string();
                     source_page0.push("[0]");
-                    let magick_out = Command::new("magick")
-                        .arg(&source_page0)
-                        .arg(out_path)
-                        .output()
-                        .map_err(|me| {
-                            if me.kind() == ErrorKind::NotFound {
-                                "Neither pdftoppm nor magick was found on PATH. Install Poppler or ImageMagick to render PDFs.".to_string()
-                            } else {
-                                format!("Failed to run magick: {me}")
-                            }
-                        })?;
-                    if !magick_out.status.success() {
-                        let stderr = String::from_utf8_lossy(&magick_out.stderr);
-                        return Err(format!("magick failed: {}", stderr.trim()));
-                    }
-                    Ok(())
+                    let mut magick_cmd = Command::new("magick");
+                    magick_cmd.arg(&source_page0).arg(safe_cli_path(out_path));
+                    run_command_with_timeout(magick_cmd, "magick", SUBPROCESS_TIMEOUT).map_err(
+                        |me| match me {
+                            SubprocessError::NotFound => "Neither pdftoppm nor magick was found on PATH. Install Poppler or ImageMagick to render PDFs.".to_string(),
+                            SubprocessError::TimedOut(d) => format!("magick timed out after {}s", d.as_secs()),
+                            SubprocessError::Failed(stderr) => format!("magick failed: {stderr}"),
+                            SubprocessError::Io(msg) => msg,
+                        },
+                    )
                 }
-                Err(e) => Err(format!("Failed to run pdftoppm: {e}")),
+                Err(SubprocessError::TimedOut(d)) => {
+                    Err(format!("pdftoppm timed out after {}s", d.as_secs()))
+                }
+                Err(SubprocessError::Failed(stderr)) => Err(format!("pdftoppm failed: {stderr}")),
+                Err(SubprocessError::Io(msg)) => Err(msg),
             }
         }
         _ => Err(format!("Unsupported PDF target format: {target_ext}")),
@@ -631,24 +709,19 @@ fn convert_pdf(source: &Path, out_path: &Path, target_ext: &str) -> Result<(), S
 
 fn convert_media(source: &Path, out_path: &Path, strip_video: bool) -> Result<(), String> {
     let mut cmd = Command::new("ffmpeg");
-    cmd.args(["-y", "-i"]).arg(source);
+    cmd.args(["-y", "-i"]).arg(safe_cli_path(source));
     if strip_video {
         cmd.arg("-vn");
     }
-    let output = cmd.arg(out_path).output().map_err(|e| {
-        if e.kind() == ErrorKind::NotFound {
-            "ffmpeg was not found on PATH. Install ffmpeg to convert audio/video files."
-                .to_string()
-        } else {
-            format!("Failed to run ffmpeg: {e}")
+    cmd.arg(safe_cli_path(out_path));
+    run_command_with_timeout(cmd, "ffmpeg", SUBPROCESS_TIMEOUT).map_err(|e| match e {
+        SubprocessError::NotFound => {
+            "ffmpeg was not found on PATH. Install ffmpeg to convert audio/video files.".to_string()
         }
-    })?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("ffmpeg conversion failed: {}", stderr.trim()));
-    }
-    Ok(())
+        SubprocessError::TimedOut(d) => format!("ffmpeg timed out after {}s", d.as_secs()),
+        SubprocessError::Failed(stderr) => format!("ffmpeg conversion failed: {stderr}"),
+        SubprocessError::Io(msg) => msg,
+    })
 }
 
 /// Converts `source` to `target_ext` in the same directory, avoiding overwriting existing files.
@@ -676,23 +749,28 @@ pub fn convert_file(source: &Path, target_ext: &str) -> Result<ConvertResult, St
         ));
     }
 
-    let out_path = build_output_path(source, &target);
+    let out_path = build_output_path(source, &target)?;
 
-    if IMAGE_EXTS.contains(&src_ext.as_str()) {
-        convert_image(source, &out_path, &target)?;
+    let res = if IMAGE_EXTS.contains(&src_ext.as_str()) {
+        convert_image(source, &out_path, &target)
     } else if DATA_EXTS.contains(&src_ext.as_str()) || src_ext == "yml" {
-        convert_data(source, &out_path, &src_ext, &target)?;
+        convert_data(source, &out_path, &src_ext, &target)
     } else if VIDEO_EXTS.contains(&src_ext.as_str()) {
         let strip_video = AUDIO_EXTS.contains(&target.as_str());
-        convert_media(source, &out_path, strip_video)?;
+        convert_media(source, &out_path, strip_video)
     } else if AUDIO_EXTS.contains(&src_ext.as_str()) {
-        convert_media(source, &out_path, false)?;
+        convert_media(source, &out_path, false)
     } else if src_ext == "pdf" {
-        convert_pdf(source, &out_path, &target)?;
+        convert_pdf(source, &out_path, &target)
     } else if PANDOC_EXTS.contains(&src_ext.as_str()) {
-        convert_via_pandoc(source, &out_path)?;
+        convert_via_pandoc(source, &out_path)
     } else {
-        convert_text(source, &out_path, &src_ext, &target)?;
+        convert_text(source, &out_path, &src_ext, &target)
+    };
+
+    if let Err(e) = res {
+        let _ = fs::remove_file(&out_path);
+        return Err(e);
     }
 
     let bytes_written = fs::metadata(&out_path)
@@ -914,5 +992,31 @@ mod tests {
         let pdf_bytes = fs::read(&pdf_res.output_path).unwrap();
         assert!(pdf_bytes.starts_with(b"%PDF-1.4"));
         assert!(pdf_bytes.ends_with(b"%%EOF\n"));
+    }
+
+    #[test]
+    fn convert_file_missing_file_returns_err() {
+        let dir = TempDir::new("missing");
+        let missing = dir.path().join("does_not_exist.png");
+        let err = convert_file(&missing, "jpg").unwrap_err();
+        assert!(err.contains("Source file does not exist"));
+    }
+
+    #[test]
+    fn convert_file_unsupported_extension_returns_err() {
+        let dir = TempDir::new("unsupported");
+        let src = dir.path().join("archive.xyz");
+        fs::write(&src, b"data").unwrap();
+        let err = convert_file(&src, "png").unwrap_err();
+        assert!(err.contains("is not supported"));
+    }
+
+    #[test]
+    fn supported_targets_handles_uppercase_extension() {
+        let targets = supported_targets("PNG");
+        assert!(targets.contains(&"jpg"));
+        assert!(targets.contains(&"webp"));
+        assert!(targets.contains(&"pdf"));
+        assert!(!targets.contains(&"png"));
     }
 }

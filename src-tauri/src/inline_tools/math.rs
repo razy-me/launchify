@@ -110,14 +110,34 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
     Ok(tokens)
 }
 
+const MAX_RECURSION_DEPTH: usize = 128;
+
 struct Parser {
     tokens: Vec<Token>,
     pos: usize,
+    depth: usize,
 }
 
 impl Parser {
     fn new(tokens: Vec<Token>) -> Self {
-        Self { tokens, pos: 0 }
+        Self {
+            tokens,
+            pos: 0,
+            depth: 0,
+        }
+    }
+
+    fn with_depth<F>(&mut self, f: F) -> Result<f64, String>
+    where
+        F: FnOnce(&mut Self) -> Result<f64, String>,
+    {
+        if self.depth >= MAX_RECURSION_DEPTH {
+            return Err("Expression nesting too deep".to_string());
+        }
+        self.depth += 1;
+        let res = f(self);
+        self.depth -= 1;
+        res
     }
 
     fn peek(&self) -> Option<&Token> {
@@ -155,16 +175,16 @@ impl Parser {
     }
 
     fn parse_mul_div(&mut self) -> Result<f64, String> {
-        let mut left = self.parse_power()?;
+        let mut left = self.parse_unary()?;
         while let Some(tok) = self.peek() {
             match tok {
                 Token::Star => {
                     self.next();
-                    left *= self.parse_power()?;
+                    left *= self.parse_unary()?;
                 }
                 Token::Slash => {
                     self.next();
-                    let right = self.parse_power()?;
+                    let right = self.parse_unary()?;
                     if right == 0.0 {
                         return Err("Division by zero".to_string());
                     }
@@ -172,7 +192,7 @@ impl Parser {
                 }
                 Token::Percent => {
                     self.next();
-                    let right = self.parse_power()?;
+                    let right = self.parse_unary()?;
                     if right == 0.0 {
                         return Err("Modulo by zero".to_string());
                     }
@@ -185,10 +205,10 @@ impl Parser {
     }
 
     fn parse_power(&mut self) -> Result<f64, String> {
-        let base = self.parse_unary()?;
+        let base = self.parse_primary()?;
         if matches!(self.peek(), Some(Token::Caret)) {
             self.next();
-            let exp = self.parse_power()?;
+            let exp = self.with_depth(|p| p.parse_unary())?;
             Ok(base.powf(exp))
         } else {
             Ok(base)
@@ -199,13 +219,13 @@ impl Parser {
         match self.peek() {
             Some(Token::Plus) => {
                 self.next();
-                self.parse_unary()
+                self.with_depth(|p| p.parse_unary())
             }
             Some(Token::Minus) => {
                 self.next();
-                Ok(-self.parse_unary()?)
+                Ok(-self.with_depth(|p| p.parse_unary())?)
             }
-            _ => self.parse_primary(),
+            _ => self.parse_power(),
         }
     }
 
@@ -213,7 +233,7 @@ impl Parser {
         match self.next() {
             Some(Token::Number(n)) => Ok(n),
             Some(Token::LParen) => {
-                let val = self.parse_expr()?;
+                let val = self.with_depth(|p| p.parse_expr())?;
                 match self.next() {
                     Some(Token::RParen) => Ok(val),
                     _ => Err("Expected closing ')'".to_string()),
@@ -222,7 +242,7 @@ impl Parser {
             Some(Token::Ident(name)) => {
                 if matches!(self.peek(), Some(Token::LParen)) {
                     self.next(); // consume '('
-                    let arg = self.parse_expr()?;
+                    let arg = self.with_depth(|p| p.parse_expr())?;
                     match self.next() {
                         Some(Token::RParen) => eval_function(&name, arg),
                         _ => Err(format!("Expected ')' after function '{name}'")),
@@ -298,6 +318,10 @@ pub fn format_number(val: f64) -> String {
     if val == 0.0 {
         return "0".to_string();
     }
+    let abs = val.abs();
+    if abs < 1e-9 || abs >= 1e15 {
+        return format!("{val:.6e}");
+    }
     // Round to 10 significant decimal places to suppress 0.1 + 0.2 = 0.30000000000000004
     let rounded = format!("{val:.10}");
     let trimmed = rounded.trim_end_matches('0').trim_end_matches('.');
@@ -364,5 +388,31 @@ mod tests {
         assert!(!looks_like_math_expr("spotify"));
         assert!(!looks_like_math_expr("foo-bar"));
         assert!(!looks_like_math_expr("2024"));
+    }
+
+    #[test]
+    fn recursion_depth_is_bounded() {
+        let deep_parens = format!("{}1{}", "(".repeat(200), ")".repeat(200));
+        assert!(eval_math(&deep_parens).is_err());
+
+        let deep_unary = format!("{}1", "-".repeat(200));
+        assert!(eval_math(&deep_unary).is_err());
+
+        let deep_power = format!("{}1", "2^".repeat(200));
+        assert!(eval_math(&deep_power).is_err());
+    }
+
+    #[test]
+    fn unary_minus_and_exponentiation_precedence() {
+        assert_eq!(eval_math("-2^2").unwrap(), -4.0);
+        assert_eq!(eval_math("-2^2 + 4").unwrap(), 0.0);
+        assert_eq!(eval_math("2^-2").unwrap(), 0.25);
+        assert_eq!(eval_math("(-2)^2").unwrap(), 4.0);
+    }
+
+    #[test]
+    fn format_number_scientific_for_extreme_magnitudes() {
+        assert_eq!(format_number(1e-12), "1.000000e-12");
+        assert_eq!(format_number(1e20), "1.000000e20");
     }
 }

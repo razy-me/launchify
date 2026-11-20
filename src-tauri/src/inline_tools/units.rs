@@ -130,6 +130,9 @@ pub fn try_convert(input: &str, rates: &HashMap<String, f64>) -> Option<(String,
         } else {
             val * factor_a / factor_b
         };
+        if !result.is_finite() {
+            return None;
+        }
         let num_str = format_number(result);
         let display = format!("{num_str} {label_b}");
         return Some((display, num_str, "Unit".to_string()));
@@ -141,6 +144,9 @@ pub fn try_convert(input: &str, rates: &HashMap<String, f64>) -> Option<(String,
     ) {
         // Rates are USD-based: 1 USD = rate_x X
         let result = val / rate_a * rate_b;
+        if !result.is_finite() {
+            return None;
+        }
         let num_str = format!("{result:.2}");
         let display = format!("{num_str} {code_b}");
         return Some((display, num_str, "Currency (offline)".to_string()));
@@ -183,5 +189,12 @@ mod tests {
     fn incompatible_units_return_none() {
         let rates = HashMap::new();
         assert!(try_convert("100 km to kg", &rates).is_none());
+    }
+
+    #[test]
+    fn overflow_returns_none() {
+        let rates = HashMap::new();
+        assert!(try_convert("1e308 tb to b", &rates).is_none());
+        assert!(try_convert("1e308 usd to jpy", &rates).is_none());
     }
 }
