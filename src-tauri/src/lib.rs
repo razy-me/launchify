@@ -2,6 +2,8 @@ pub mod app;
 pub mod catalog;
 pub mod commands;
 pub mod config;
+pub mod converter;
+pub mod find_files;
 pub mod frecency;
 pub mod icons;
 pub mod indexer;
