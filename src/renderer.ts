@@ -1,4 +1,5 @@
-import { resolveIconUrl, resizeLauncher } from "./ipc";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { convertFile, getConvertTargets, resolveIconUrl, resizeLauncher } from "./ipc";
 import { computeTargetHeight } from "./state";
 import type { ItemKind, LauncherState, PrefixMode, SearchResult } from "./types";
 
@@ -75,6 +76,38 @@ export function renderState(
   }
 
   const wasOpen = refs.launcher.classList.contains("has-results");
+  if (state.mode === "Convert") {
+    refs.launcher.classList.remove("has-results");
+    refs.launcher.classList.add("has-convert");
+    refs.resultsList.hidden = true;
+    refs.resultsList.classList.remove("animate-enter");
+
+    const panel = ensureConvertPanel(refs.launcher);
+    panel.hidden = false;
+
+    const stripped = state.query.replace(/^convert\s*/i, "").trim();
+    if (stripped && stripped !== convertLastPrefill) {
+      convertLastPrefill = stripped;
+      setConvertSourcePath(stripped);
+    }
+
+    const targetHeight = 380;
+    if (targetHeight !== state.lastHeightPx) {
+      state.lastHeightPx = targetHeight;
+      void resizeLauncher(targetHeight).catch(() => {
+        // Ignore resize errors when running in browser preview without Tauri
+      });
+    }
+    return;
+  }
+
+  refs.launcher.classList.remove("has-convert");
+  const existingConvertPanel = document.getElementById("convert-panel");
+  if (existingConvertPanel) {
+    existingConvertPanel.hidden = true;
+  }
+  convertLastPrefill = "";
+
   const hasResults = state.results.length > 0;
   refs.launcher.classList.toggle("has-results", hasResults);
   refs.resultsList.classList.toggle("animate-enter", !wasOpen && hasResults);
@@ -262,4 +295,264 @@ function createFallbackGlyph(kind: ItemKind): HTMLElement {
   span.className = "result-icon-fallback";
   span.textContent = KIND_FALLBACK_GLYPH[kind] ?? "•";
   return span;
+}
+
+let convertLastPrefill = "";
+let convertPanelEl: HTMLElement | null = null;
+let convertPathInputEl: HTMLInputElement | null = null;
+let convertSourceExtEl: HTMLElement | null = null;
+let convertTargetSelectEl: HTMLSelectElement | null = null;
+let convertSubmitBtnEl: HTMLButtonElement | null = null;
+let convertStatusEl: HTMLElement | null = null;
+let convertTargetsSeq = 0;
+
+function extractExt(filePath: string): string {
+  const trimmed = filePath.trim().replace(/^["']|["']$/g, "");
+  const dot = trimmed.lastIndexOf(".");
+  if (dot < 0 || dot === trimmed.length - 1) {
+    return "";
+  }
+  const slash = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
+  if (dot < slash) {
+    return "";
+  }
+  return trimmed.slice(dot + 1).toLowerCase();
+}
+
+function setConvertStatus(message: string, kind: "success" | "error" | "info"): void {
+  if (!convertStatusEl) {
+    return;
+  }
+  convertStatusEl.textContent = message;
+  convertStatusEl.className = `convert-status is-${kind}`;
+  convertStatusEl.hidden = !message;
+}
+
+async function refreshConvertTargets(sourcePath: string): Promise<void> {
+  if (!convertSourceExtEl || !convertTargetSelectEl || !convertSubmitBtnEl) {
+    return;
+  }
+  const cleanPath = sourcePath.trim().replace(/^["']|["']$/g, "");
+  const ext = extractExt(cleanPath);
+  convertSourceExtEl.textContent = ext ? `.${ext}` : "—";
+
+  const seq = ++convertTargetsSeq;
+  if (!cleanPath || !ext) {
+    convertTargetSelectEl.replaceChildren();
+    convertTargetSelectEl.disabled = true;
+    convertSubmitBtnEl.disabled = true;
+    return;
+  }
+
+  try {
+    const targets = await getConvertTargets(cleanPath);
+    if (seq !== convertTargetsSeq) {
+      return;
+    }
+    convertTargetSelectEl.replaceChildren();
+    if (targets.length === 0) {
+      const opt = document.createElement("option");
+      opt.value = "";
+      opt.textContent = "No targets";
+      convertTargetSelectEl.appendChild(opt);
+      convertTargetSelectEl.disabled = true;
+      convertSubmitBtnEl.disabled = true;
+    } else {
+      for (const fmt of targets) {
+        const opt = document.createElement("option");
+        opt.value = fmt;
+        opt.textContent = fmt.toUpperCase();
+        convertTargetSelectEl.appendChild(opt);
+      }
+      convertTargetSelectEl.disabled = false;
+      convertSubmitBtnEl.disabled = false;
+    }
+  } catch {
+    if (seq !== convertTargetsSeq) {
+      return;
+    }
+    convertTargetSelectEl.replaceChildren();
+    convertTargetSelectEl.disabled = true;
+    convertSubmitBtnEl.disabled = true;
+  }
+}
+
+function setConvertSourcePath(path: string): void {
+  if (!convertPathInputEl) {
+    return;
+  }
+  convertPathInputEl.value = path;
+  setConvertStatus("", "info");
+  void refreshConvertTargets(path);
+}
+
+async function runConvert(): Promise<void> {
+  if (!convertPathInputEl || !convertTargetSelectEl || !convertSubmitBtnEl) {
+    return;
+  }
+  const sourcePath = convertPathInputEl.value.trim().replace(/^["']|["']$/g, "");
+  const targetFormat = convertTargetSelectEl.value;
+  if (!sourcePath || !targetFormat) {
+    return;
+  }
+
+  convertSubmitBtnEl.disabled = true;
+  setConvertStatus("Converting...", "info");
+  try {
+    const res = await convertFile(sourcePath, targetFormat);
+    setConvertStatus(
+      `Saved: ${res.output_path} (${res.bytes_written.toLocaleString()} bytes)`,
+      "success"
+    );
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    setConvertStatus(`Error: ${msg}`, "error");
+  } finally {
+    convertSubmitBtnEl.disabled = false;
+  }
+}
+
+function ensureConvertPanel(launcher: HTMLElement): HTMLElement {
+  if (convertPanelEl) {
+    return convertPanelEl;
+  }
+
+  const panel = document.createElement("section");
+  panel.id = "convert-panel";
+  panel.hidden = true;
+
+  const dropzone = document.createElement("div");
+  dropzone.id = "convert-dropzone";
+  dropzone.textContent = "Drop a file here, or paste/browse a path below";
+
+  const pathRow = document.createElement("div");
+  pathRow.className = "convert-row";
+
+  const pathInput = document.createElement("input");
+  pathInput.id = "convert-path-input";
+  pathInput.type = "text";
+  pathInput.placeholder = "C:\\path\\to\\file.png";
+  pathInput.autocomplete = "off";
+  pathInput.spellcheck = false;
+
+  const filePicker = document.createElement("input");
+  filePicker.type = "file";
+  filePicker.hidden = true;
+
+  const browseBtn = document.createElement("button");
+  browseBtn.id = "convert-browse-btn";
+  browseBtn.type = "button";
+  browseBtn.textContent = "Browse";
+
+  pathRow.append(pathInput, browseBtn, filePicker);
+
+  const formatRow = document.createElement("div");
+  formatRow.className = "convert-row convert-format-row";
+
+  const sourceExt = document.createElement("span");
+  sourceExt.id = "convert-source-ext";
+  sourceExt.textContent = "—";
+
+  const arrow = document.createElement("span");
+  arrow.className = "convert-arrow";
+  arrow.textContent = "→";
+
+  const targetSelect = document.createElement("select");
+  targetSelect.id = "convert-target-select";
+  targetSelect.disabled = true;
+
+  const submitBtn = document.createElement("button");
+  submitBtn.id = "convert-submit-btn";
+  submitBtn.type = "button";
+  submitBtn.textContent = "Convert";
+  submitBtn.disabled = true;
+
+  formatRow.append(sourceExt, arrow, targetSelect, submitBtn);
+
+  const statusEl = document.createElement("div");
+  statusEl.id = "convert-status";
+  statusEl.className = "convert-status";
+  statusEl.hidden = true;
+
+  panel.append(dropzone, pathRow, formatRow, statusEl);
+  launcher.appendChild(panel);
+
+  convertPanelEl = panel;
+  convertPathInputEl = pathInput;
+  convertSourceExtEl = sourceExt;
+  convertTargetSelectEl = targetSelect;
+  convertSubmitBtnEl = submitBtn;
+  convertStatusEl = statusEl;
+
+  pathInput.addEventListener("input", () => {
+    setConvertStatus("", "info");
+    void refreshConvertTargets(pathInput.value);
+  });
+
+  browseBtn.addEventListener("click", () => {
+    filePicker.click();
+  });
+
+  filePicker.addEventListener("change", () => {
+    const file = filePicker.files?.[0] as (File & { path?: string }) | undefined;
+    if (file) {
+      setConvertSourcePath(file.path ?? file.name);
+    }
+    filePicker.value = "";
+  });
+
+  submitBtn.addEventListener("click", () => {
+    void runConvert();
+  });
+
+  window.addEventListener("launchify:convert-submit", () => {
+    if (!panel.hidden) {
+      void runConvert();
+    }
+  });
+
+  // HTML5 Drag & Drop fallback
+  dropzone.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    dropzone.classList.add("is-drag-over");
+  });
+  dropzone.addEventListener("dragleave", () => {
+    dropzone.classList.remove("is-drag-over");
+  });
+  dropzone.addEventListener("drop", (e) => {
+    e.preventDefault();
+    dropzone.classList.remove("is-drag-over");
+    const file = e.dataTransfer?.files?.[0] as (File & { path?: string }) | undefined;
+    if (file) {
+      setConvertSourcePath(file.path ?? file.name);
+    }
+  });
+
+  // Tauri v2 native drag-drop event
+  try {
+    void getCurrentWebview()
+      .onDragDropEvent((event) => {
+        if (panel.hidden) {
+          return;
+        }
+        if (event.payload.type === "enter" || event.payload.type === "over") {
+          dropzone.classList.add("is-drag-over");
+        } else if (event.payload.type === "leave") {
+          dropzone.classList.remove("is-drag-over");
+        } else if (event.payload.type === "drop") {
+          dropzone.classList.remove("is-drag-over");
+          const firstPath = event.payload.paths[0];
+          if (firstPath) {
+            setConvertSourcePath(firstPath);
+          }
+        }
+      })
+      .catch(() => {
+        // Ignore outside Tauri
+      });
+  } catch {
+    // Ignore outside Tauri
+  }
+
+  return panel;
 }

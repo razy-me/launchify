@@ -10,7 +10,7 @@ export interface KeyboardHandlers {
 }
 
 export function attachKeyboardFlow(
-  input: HTMLInputElement,
+  _input: HTMLInputElement,
   state: LauncherState,
   handlers: KeyboardHandlers
 ): () => void {
@@ -45,6 +45,10 @@ export function attachKeyboardFlow(
 
     if (e.key === "Enter") {
       e.preventDefault();
+      if (state.mode === "Convert") {
+        window.dispatchEvent(new CustomEvent("launchify:convert-submit"));
+        return;
+      }
       const secondary = e.shiftKey || e.ctrlKey;
       handlers.onExecute(secondary);
       return;
@@ -58,11 +62,11 @@ export function attachKeyboardFlow(
 
     if (e.key === "Escape") {
       e.preventDefault();
-      if (input.value.length > 0) {
+      if (state.mode === "Convert") {
         handlers.onClearInput();
-      } else {
-        handlers.onHide();
+        return;
       }
+      handlers.onHide();
     }
   };
 
@@ -76,8 +80,11 @@ export function attachKeyboardFlow(
 
   const onWindowBlur = (): void => {
     altDownAlone = false;
+    if (state.mode === "Convert") {
+      return;
+    }
     requestAnimationFrame(() => {
-      if (!document.hasFocus()) {
+      if (!document.hasFocus() && state.mode !== "Convert") {
         handlers.onHide();
       }
     });
