@@ -4,6 +4,8 @@ use crossbeam_channel::Sender;
 pub const VK_LWIN_CODE: u16 = 0x5B;
 /// Virtual-key code for Left Alt key (`VK_LMENU`).
 pub const VK_TRIGGER_CODE: u16 = 0xA4;
+/// Virtual-key code for Right Shift key (`VK_RSHIFT`).
+pub const VK_RSHIFT_CODE: u16 = 0xA1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HookDecision {
@@ -15,7 +17,7 @@ pub enum HookDecision {
 /// while leaving `Alt+*` shortcuts untouched.
 #[derive(Debug, Default)]
 pub struct WinKeyStateMachine {
-    trigger_down: bool,
+    active_trigger: Option<u16>,
     other_key_pressed: bool,
 }
 
@@ -25,32 +27,40 @@ impl WinKeyStateMachine {
     }
 
     /// Processes a low-level keyboard event and returns whether to pass through
-    /// or trigger the launcher toggle on a solo `VK_LMENU` tap.
+    /// or trigger the launcher toggle on a solo `VK_LMENU` or `VK_RSHIFT` tap.
     pub fn on_key_event(&mut self, vk: u16, is_key_down: bool, is_injected: bool) -> HookDecision {
         if is_injected {
             return HookDecision::PassThrough;
         }
 
-        if vk == VK_TRIGGER_CODE {
+        if vk == VK_TRIGGER_CODE || vk == VK_RSHIFT_CODE {
             if is_key_down {
-                if !self.trigger_down {
-                    self.trigger_down = true;
-                    self.other_key_pressed = false;
+                match self.active_trigger {
+                    None => {
+                        self.active_trigger = Some(vk);
+                        self.other_key_pressed = false;
+                    }
+                    Some(active) if active != vk => {
+                        self.other_key_pressed = true;
+                    }
+                    Some(_) => {}
                 }
                 return HookDecision::PassThrough;
-            } else {
-                let should_trigger = self.trigger_down && !self.other_key_pressed;
-                self.trigger_down = false;
+            } else if self.active_trigger == Some(vk) {
+                let should_trigger = !self.other_key_pressed;
+                self.active_trigger = None;
                 self.other_key_pressed = false;
                 return if should_trigger {
                     HookDecision::Trigger
                 } else {
                     HookDecision::PassThrough
                 };
+            } else {
+                return HookDecision::PassThrough;
             }
         }
 
-        if self.trigger_down && is_key_down {
+        if self.active_trigger.is_some() && is_key_down {
             self.other_key_pressed = true;
         }
 
@@ -100,9 +110,10 @@ mod win_impl {
     use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
     use windows::Win32::System::Threading::GetCurrentThreadId;
     use windows::Win32::UI::WindowsAndMessaging::{
-        CallNextHookEx, DispatchMessageW, GetMessageW, PostThreadMessageW, SetWindowsHookExW,
-        TranslateMessage, UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT, LLKHF_INJECTED, MSG,
-        WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_QUIT, WM_SYSKEYDOWN, WM_SYSKEYUP,
+        CallNextHookEx, DispatchMessageW, GetMessageW, PeekMessageW, PostThreadMessageW,
+        SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT,
+        LLKHF_INJECTED, MSG, PM_NOREMOVE, WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_QUIT,
+        WM_SYSKEYDOWN, WM_SYSKEYUP, WM_USER,
     };
 
     struct HookContext {
@@ -165,10 +176,13 @@ mod win_impl {
                     }
                 };
 
+                // Force creation of the thread message queue before signaling readiness
+                // so `PostThreadMessageW(..., WM_QUIT, ...)` cannot race with startup.
+                let mut msg = MSG::default();
+                let _ = PeekMessageW(&mut msg, None, WM_USER, WM_USER, PM_NOREMOVE);
                 let _ = ready_tx.send(Ok(tid));
 
-                let mut msg = MSG::default();
-                while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+                while GetMessageW(&mut msg, None, 0, 0).0 > 0 {
                     let _ = TranslateMessage(&msg);
                     DispatchMessageW(&msg);
                 }
@@ -229,5 +243,39 @@ mod tests {
         let mut sm = WinKeyStateMachine::new();
         assert_eq!(sm.on_key_event(VK_TRIGGER_CODE, true, true), HookDecision::PassThrough);
         assert_eq!(sm.on_key_event(VK_TRIGGER_CODE, false, true), HookDecision::PassThrough);
+    }
+
+    #[test]
+    fn solo_rshift_tap_triggers_launcher() {
+        let mut sm = WinKeyStateMachine::new();
+        assert_eq!(sm.on_key_event(VK_RSHIFT_CODE, true, false), HookDecision::PassThrough);
+        assert_eq!(sm.on_key_event(VK_RSHIFT_CODE, false, false), HookDecision::Trigger);
+    }
+
+    #[test]
+    fn rshift_combo_passes_through_without_trigger() {
+        let mut sm = WinKeyStateMachine::new();
+        assert_eq!(sm.on_key_event(VK_RSHIFT_CODE, true, false), HookDecision::PassThrough);
+        assert_eq!(sm.on_key_event(b'A' as u16, true, false), HookDecision::PassThrough);
+        assert_eq!(sm.on_key_event(b'A' as u16, false, false), HookDecision::PassThrough);
+        assert_eq!(sm.on_key_event(VK_RSHIFT_CODE, false, false), HookDecision::PassThrough);
+    }
+
+    #[test]
+    fn lalt_rshift_layout_switch_does_not_trigger() {
+        let mut sm = WinKeyStateMachine::new();
+        assert_eq!(sm.on_key_event(VK_TRIGGER_CODE, true, false), HookDecision::PassThrough);
+        assert_eq!(sm.on_key_event(VK_RSHIFT_CODE, true, false), HookDecision::PassThrough);
+        assert_eq!(sm.on_key_event(VK_RSHIFT_CODE, false, false), HookDecision::PassThrough);
+        assert_eq!(sm.on_key_event(VK_TRIGGER_CODE, false, false), HookDecision::PassThrough);
+    }
+
+    #[test]
+    fn rshift_lalt_layout_switch_does_not_trigger() {
+        let mut sm = WinKeyStateMachine::new();
+        assert_eq!(sm.on_key_event(VK_RSHIFT_CODE, true, false), HookDecision::PassThrough);
+        assert_eq!(sm.on_key_event(VK_TRIGGER_CODE, true, false), HookDecision::PassThrough);
+        assert_eq!(sm.on_key_event(VK_TRIGGER_CODE, false, false), HookDecision::PassThrough);
+        assert_eq!(sm.on_key_event(VK_RSHIFT_CODE, false, false), HookDecision::PassThrough);
     }
 }

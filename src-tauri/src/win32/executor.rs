@@ -129,6 +129,9 @@ mod win_impl {
             LaunchMode::Normal => shell_execute("open", target, None, SW_SHOWNORMAL),
             LaunchMode::Elevated => shell_execute("runas", target, None, SW_SHOWNORMAL),
             LaunchMode::RevealInExplorer => {
+                if target.contains('"') || target.contains('\0') {
+                    return Err("Invalid characters in target path".to_string());
+                }
                 let args = format!("/select,\"{target}\"");
                 shell_execute("open", "explorer.exe", Some(&args), SW_SHOWNORMAL)
             }
@@ -183,12 +186,12 @@ mod win_impl {
     pub fn system_power_action(action: &str) -> Result<(), String> {
         match action {
             "lock" => shell_execute("open", "rundll32.exe", Some("user32.dll,LockWorkStation"), SW_HIDE),
-            "sleep" => shell_execute(
-                "open",
-                "rundll32.exe",
-                Some("powrprof.dll,SetSuspendState 0,1,0"),
-                SW_HIDE,
-            ),
+            "sleep" => unsafe {
+                if !windows::Win32::System::Power::SetSuspendState(false, false, false).as_bool() {
+                    return Err("SetSuspendState failed".to_string());
+                }
+                Ok(())
+            },
             "restart" => shell_execute("open", "shutdown.exe", Some("/r /t 0"), SW_HIDE),
             "shutdown" => shell_execute("open", "shutdown.exe", Some("/s /t 0"), SW_HIDE),
             other => Err(format!("Unknown power action: {other}")),
@@ -214,6 +217,15 @@ mod win_impl {
             assert!(args.starts_with("-- powershell.exe -NoExit -EncodedCommand \""));
             assert!(args.ends_with('"'));
             assert!(args.contains(&encoded));
+        }
+
+        #[test]
+        fn reveal_in_explorer_rejects_quotes_and_nul() {
+            use super::super::{execute_target, LaunchMode};
+            let err_quote = execute_target(r#"C:\foo" /root,"\\evil\share"#, LaunchMode::RevealInExplorer);
+            assert!(err_quote.is_err());
+            let err_nul = execute_target("C:\\foo\0bar", LaunchMode::RevealInExplorer);
+            assert!(err_nul.is_err());
         }
     }
 }

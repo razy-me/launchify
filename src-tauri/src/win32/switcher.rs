@@ -44,9 +44,10 @@ mod win_impl {
         PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        BringWindowToTop, EnumWindows, GetWindowLongW, GetWindowTextLengthW, GetWindowTextW,
-        GetWindowThreadProcessId, IsIconic, IsWindowVisible, SetForegroundWindow, ShowWindow,
-        GWL_EXSTYLE, SW_RESTORE, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
+        BringWindowToTop, EnumWindows, GetForegroundWindow, GetWindowLongW,
+        GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
+        SetForegroundWindow, ShowWindow, GWL_EXSTYLE, SW_RESTORE, WS_EX_APPWINDOW,
+        WS_EX_TOOLWINDOW,
     };
 
     unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> windows::Win32::Foundation::BOOL {
@@ -151,15 +152,19 @@ mod win_impl {
                 let _ = ShowWindow(hwnd, SW_RESTORE);
             }
             let cur_thread = GetCurrentThreadId();
-            let target_thread = GetWindowThreadProcessId(hwnd, None);
-            let attach = target_thread != 0 && target_thread != cur_thread;
-            if attach {
-                let _ = AttachThreadInput(cur_thread, target_thread, true);
-            }
+            let fg_hwnd = GetForegroundWindow();
+            let fg_thread = if !fg_hwnd.0.is_null() {
+                GetWindowThreadProcessId(fg_hwnd, None)
+            } else {
+                0
+            };
+            let attached = fg_thread != 0
+                && fg_thread != cur_thread
+                && AttachThreadInput(cur_thread, fg_thread, true).as_bool();
             let _ = BringWindowToTop(hwnd);
             let ok = SetForegroundWindow(hwnd).as_bool();
-            if attach {
-                let _ = AttachThreadInput(cur_thread, target_thread, false);
+            if attached {
+                let _ = AttachThreadInput(cur_thread, fg_thread, false);
             }
             if !ok {
                 return Err(format!("SetForegroundWindow failed for hwnd {hwnd_raw}"));

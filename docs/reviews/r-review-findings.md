@@ -333,8 +333,8 @@ Wrap recursive calls in `parse_power`, `parse_unary`, and `parse_primary` with a
 ```
 Pass `safe_cli_path(...)` to external tools and spawn with a timeout (killing the child on expiry).
 
-### [MAJOR] [OPEN] F05-01 `system_power_action("sleep")` hibernates instead of sleeping due to `rundll32` signature mismatch
-- **Status**: OPEN
+### [MAJOR] [FIXED] F05-01 `system_power_action("sleep")` hibernates instead of sleeping due to `rundll32` signature mismatch
+- **Status**: FIXED
 - **Where**: `src-tauri/src/win32/executor.rs:186-191`
 - **Source**: `r-review` (Tier 2) (2026-11-20)
 - **Confidence**: HIGH
@@ -343,8 +343,8 @@ Pass `safe_cli_path(...)` to external tools and spawn with a timeout (killing th
 - **Why**: `SetSuspendState` is not a `rundll32`-compatible entry point.
 - **Fix**: Add `"Win32_System_Power"` to `windows` features in `src-tauri/Cargo.toml` and call `unsafe { windows::Win32::System::Power::SetSuspendState(false, false, false) }` directly.
 
-### [MAJOR] [OPEN] F05-02 `LAlt+RShift` keyboard layout switch falsely triggers the launcher
-- **Status**: OPEN
+### [MAJOR] [FIXED] F05-02 `LAlt+RShift` keyboard layout switch falsely triggers the launcher
+- **Status**: FIXED
 - **Where**: `src-tauri/src/win32/hook.rs:19-60`
 - **Source**: `r-review` (Tier 2) (2026-11-20)
 - **Confidence**: HIGH
@@ -353,8 +353,8 @@ Pass `safe_cli_path(...)` to external tools and spawn with a timeout (killing th
 - **Why**: `WinKeyStateMachine` tracks `trigger_down: bool` without recording which trigger key initiated the press.
 - **Fix**: Replace `trigger_down: bool` with `active_trigger: Option<u16>` and set `other_key_pressed = true` when a different trigger key is pressed while one is active.
 
-### [MAJOR] [OPEN] F05-03 Potential deadlock in `WinKeyHookHandle::drop` due to `PostThreadMessageW` startup race
-- **Status**: OPEN
+### [MAJOR] [FIXED] F05-03 Potential deadlock in `WinKeyHookHandle::drop` due to `PostThreadMessageW` startup race
+- **Status**: FIXED
 - **Where**: `src-tauri/src/win32/hook.rs:162-176`, `src-tauri/src/win32/hook.rs:195-205`
 - **Source**: `r-review` (Tier 2) (2026-11-20)
 - **Confidence**: HIGH
@@ -368,8 +368,8 @@ Pass `safe_cli_path(...)` to external tools and spawn with a timeout (killing th
  let _ = ready_tx.send(Ok(tid));
 ```
 
-### [MAJOR] [OPEN] F05-04 Argument injection into `explorer.exe` in `LaunchMode::RevealInExplorer`
-- **Status**: OPEN
+### [MAJOR] [FIXED] F05-04 Argument injection into `explorer.exe` in `LaunchMode::RevealInExplorer`
+- **Status**: FIXED
 - **Where**: `src-tauri/src/win32/executor.rs:131-134`
 - **Source**: `r-review` (Tier 2) (2026-11-20)
 - **Confidence**: HIGH
@@ -527,8 +527,8 @@ Pass `safe_cli_path(...)` to external tools and spawn with a timeout (killing th
 - **Why**: `RandomState` is not cryptographically secure.
 - **Fix**: Use `getrandom::fill(&mut bytes)` or `uuid::Uuid::new_v4()`.
 
-### [MINOR] [OPEN] F05-05 `GetMessageW` error return (`-1`) causes infinite 100%-CPU spin loop
-- **Status**: OPEN
+### [MINOR] [FIXED] F05-05 `GetMessageW` error return (`-1`) causes infinite 100%-CPU spin loop
+- **Status**: FIXED
 - **Where**: `src-tauri/src/win32/hook.rs:173-176`
 - **Source**: `r-review` (Tier 2) (2026-11-20)
 - **Confidence**: HIGH
@@ -537,8 +537,8 @@ Pass `safe_cli_path(...)` to external tools and spawn with a timeout (killing th
 - **Why**: `GetMessageW` returns `> 0`, `0`, or `-1`.
 - **Fix**: Change loop condition to `while GetMessageW(&mut msg, None, 0, 0).0 > 0`.
 
-### [MINOR] [OPEN] F05-06 `focus_window` attaches to target thread instead of foreground thread and ignores `AttachThreadInput` result
-- **Status**: OPEN
+### [MINOR] [FIXED] F05-06 `focus_window` attaches to target thread instead of foreground thread and ignores `AttachThreadInput` result
+- **Status**: FIXED
 - **Where**: `src-tauri/src/win32/switcher.rs:153-163`
 - **Source**: `r-review` (Tier 2) (2026-11-20)
 - **Confidence**: MEDIUM
