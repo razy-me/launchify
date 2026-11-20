@@ -358,10 +358,22 @@ async function refreshConvertTargets(sourcePath: string): Promise<void> {
       convertTargetSelectEl.disabled = true;
       convertSubmitBtnEl.disabled = true;
     } else {
+      const ffmpegFormats = new Set([
+        "mp4", "mkv", "webm", "mov", "avi", "flv", "wmv", "m4v",
+        "mp3", "wav", "flac", "ogg", "aac", "m4a", "opus", "wma",
+      ]);
+      const pandocFormats = new Set(["docx", "odt", "rtf", "epub", "rst", "tex"]);
       for (const fmt of targets) {
         const opt = document.createElement("option");
         opt.value = fmt;
-        opt.textContent = fmt.toUpperCase();
+        const upper = fmt.toUpperCase();
+        if (ffmpegFormats.has(fmt)) {
+          opt.textContent = `${upper} (ffmpeg)`;
+        } else if (pandocFormats.has(fmt)) {
+          opt.textContent = `${upper} (pandoc)`;
+        } else {
+          opt.textContent = upper;
+        }
         convertTargetSelectEl.appendChild(opt);
       }
       convertTargetSelectEl.disabled = false;
