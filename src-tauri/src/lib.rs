@@ -50,6 +50,8 @@ pub fn run() {
             commands::hide_launcher,
             commands::resize_launcher,
             commands::collapse_to_row,
+            commands::get_convert_targets,
+            commands::convert_file_cmd,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

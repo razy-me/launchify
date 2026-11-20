@@ -72,6 +72,7 @@ pub enum PrefixMode {
     Calc,
     Path,
     Window,
+    Convert,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

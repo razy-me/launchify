@@ -2,6 +2,7 @@ use tauri::{AppHandle, LogicalSize, Manager, State};
 
 use crate::app::{self, clamp_launcher_height, now_unix, AppState, LAUNCHER_WIDTH};
 use crate::config::ExclusionFilter;
+use crate::find_files;
 use crate::frecency::{normalize_prefix, record_selection};
 use crate::inline_tools;
 use crate::model::{
@@ -23,6 +24,10 @@ pub fn parse_prefix_mode(raw: &str) -> (PrefixMode, &str) {
         (PrefixMode::Path, rest)
     } else if let Some(rest) = trimmed.strip_prefix('@') {
         (PrefixMode::Window, rest.trim_start())
+    } else if trimmed.eq_ignore_ascii_case("convert") {
+        (PrefixMode::Convert, "")
+    } else if trimmed.len() >= 8 && trimmed[..8].eq_ignore_ascii_case("convert ") {
+        (PrefixMode::Convert, trimmed[8..].trim_start())
     } else {
         (PrefixMode::Global, trimmed)
     }
@@ -51,6 +56,25 @@ pub fn query(raw: String, state: State<'_, AppState>) -> Result<QueryResponse, S
     }
 
     let cfg = state.config.load();
+    let trimmed_raw = raw.trim_start();
+    let find_rest = if trimmed_raw.len() >= 5 && trimmed_raw[..5].eq_ignore_ascii_case("find:") {
+        Some(trimmed_raw[5..].trim_start())
+    } else if trimmed_raw.len() >= 2 && trimmed_raw[..2].eq_ignore_ascii_case("f:") {
+        Some(trimmed_raw[2..].trim_start())
+    } else {
+        None
+    };
+
+    if let Some(fq) = find_rest {
+        let roots = find_files::default_find_roots(&cfg.curated_folders);
+        let results = find_files::search_recent_files(fq, &roots, cfg.max_results);
+        return Ok(QueryResponse {
+            mode: PrefixMode::Path,
+            results,
+            inline_preview: None,
+        });
+    }
+
     let (mode, rest) = parse_prefix_mode(&raw);
 
     match mode {
@@ -83,6 +107,11 @@ pub fn query(raw: String, state: State<'_, AppState>) -> Result<QueryResponse, S
                 inline_preview,
             })
         }
+        PrefixMode::Convert => Ok(QueryResponse {
+            mode,
+            results: Vec::new(),
+            inline_preview: None,
+        }),
         PrefixMode::Path => {
             let exclusions = ExclusionFilter::new(&cfg.extra_exclusions);
             let results = path_nav::browse_path(rest, &exclusions, cfg.max_results);
@@ -199,6 +228,13 @@ pub fn execute(
         ExecuteOutcome::CopiedToClipboard {
             value: copy_val.to_string(),
         }
+    } else if let Some(file_path) = item_id.strip_prefix("file:") {
+        if action == ActionKind::Secondary {
+            win32::executor::execute_target(file_path, LaunchMode::RevealInExplorer)?;
+        } else if win32::executor::execute_target(file_path, LaunchMode::Normal).is_err() {
+            win32::executor::execute_target(file_path, LaunchMode::RevealInExplorer)?;
+        }
+        ExecuteOutcome::Launched
     } else if item_id == "__inline__" {
         let raw = state
             .last_query
@@ -318,6 +354,32 @@ pub fn resize_launcher(height: u32, app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Returns supported target formats for a given source file path based on its extension.
+#[tauri::command]
+pub fn get_convert_targets(source_path: String) -> Result<Vec<String>, String> {
+    let ext = std::path::Path::new(&source_path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+    Ok(crate::converter::supported_targets(ext)
+        .into_iter()
+        .map(String::from)
+        .collect())
+}
+
+/// Converts a file to the specified target format on a blocking worker thread.
+#[tauri::command]
+pub async fn convert_file_cmd(
+    source_path: String,
+    target_format: String,
+) -> Result<crate::converter::ConvertResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::converter::convert_file(std::path::Path::new(&source_path), &target_format)
+    })
+    .await
+    .map_err(|e| format!("conversion task failed: {e}"))?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -328,6 +390,8 @@ mod tests {
         assert_eq!(parse_prefix_mode("= 1920*0.75"), (PrefixMode::Calc, "1920*0.75"));
         assert_eq!(parse_prefix_mode("/C:\\Tools"), (PrefixMode::Path, "C:\\Tools"));
         assert_eq!(parse_prefix_mode("@ code"), (PrefixMode::Window, "code"));
+        assert_eq!(parse_prefix_mode("convert"), (PrefixMode::Convert, ""));
+        assert_eq!(parse_prefix_mode("CONVERT C:\\a.png"), (PrefixMode::Convert, "C:\\a.png"));
         assert_eq!(parse_prefix_mode("spotify"), (PrefixMode::Global, "spotify"));
     }
 }
