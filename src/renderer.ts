@@ -1,7 +1,7 @@
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { convertFile, getConvertTargets, pickConvertFile, resolveIconUrl, resizeLauncher, revealPath } from "./ipc";
 import { computeTargetHeight } from "./state";
-import type { ItemKind, LauncherState, PrefixMode, SearchResult } from "./types";
+import type { ActionKind, ItemKind, LauncherState, PrefixMode, ResultAction, SearchResult } from "./types";
 
 export interface DomRefs {
   launcher: HTMLElement;
@@ -191,13 +191,117 @@ export function renderState(
     }
   }
 
-  const targetHeight = computeTargetHeight(state.results.length);
+  if (!state.actionMenuOpen) {
+    refs.resultsList.querySelector(".action-menu")?.remove();
+    refs.resultsList.style.minHeight = "";
+  }
+
+  syncLauncherHeight(state);
+}
+
+function syncLauncherHeight(state: LauncherState): void {
+  let targetHeight = computeTargetHeight(state.results.length);
+  if (state.actionMenuOpen && state.selectedIndex >= 0) {
+    const item = state.results[state.selectedIndex];
+    if (item) {
+      const actions = getActionsForItem(item);
+      if (actions.length > 0) {
+        const menuHeight = actions.length * 32 + 16;
+        targetHeight = Math.max(targetHeight, 56 + 9 + menuHeight);
+      }
+    }
+  }
   if (targetHeight !== state.lastHeightPx) {
     state.lastHeightPx = targetHeight;
     void resizeLauncher(targetHeight).catch(() => {
       // Ignore resize errors when running in browser preview without Tauri
     });
   }
+}
+
+export function getActionsForItem(item: SearchResult): ResultAction[] {
+  const actions: ResultAction[] = [{ label: "Open", action: "Primary" }];
+
+  if (
+    item.kind === "App" ||
+    item.kind === "StoreApp" ||
+    item.kind === "File" ||
+    item.kind === "ShellCommand"
+  ) {
+    actions.push({ label: "Run as Administrator", action: "RunAsAdmin" });
+  }
+
+  if (item.kind === "App" || item.kind === "File" || item.kind === "Folder") {
+    actions.push({ label: "Reveal in Explorer", action: "Reveal" });
+    actions.push({ label: "Copy Path", action: "CopyPath" });
+  } else if (item.kind === "WebShortcut") {
+    actions.push({ label: "Copy URL", action: "CopyPath" });
+  }
+
+  return actions;
+}
+
+export function renderActionMenu(
+  refs: DomRefs,
+  state: LauncherState,
+  onExecuteAction: (action: ActionKind) => void
+): void {
+  const existing = refs.resultsList.querySelector(".action-menu");
+  if (existing) {
+    existing.remove();
+  }
+
+  if (!state.actionMenuOpen || state.selectedIndex < 0) {
+    refs.resultsList.style.minHeight = "";
+    syncLauncherHeight(state);
+    return;
+  }
+
+  const item = state.results[state.selectedIndex];
+  if (!item) {
+    refs.resultsList.style.minHeight = "";
+    syncLauncherHeight(state);
+    return;
+  }
+
+  const actions = getActionsForItem(item);
+  if (actions.length === 0) {
+    refs.resultsList.style.minHeight = "";
+    syncLauncherHeight(state);
+    return;
+  }
+
+  const menuHeight = actions.length * 32 + 16;
+  refs.resultsList.style.minHeight = `${Math.max(state.results.length * 48, menuHeight)}px`;
+  syncLauncherHeight(state);
+
+  const menu = document.createElement("div");
+  menu.className = "action-menu";
+  menu.setAttribute("role", "menu");
+
+  const rowTop = state.selectedIndex * 48;
+  const listHeight = Math.max(state.results.length * 48, menuHeight);
+  const maxTop = Math.max(0, listHeight - actions.length * 32 - 8);
+  menu.style.top = `${Math.min(rowTop + 4, maxTop)}px`;
+
+  actions.forEach((act, idx) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "action-menu-item";
+    btn.setAttribute("role", "menuitem");
+    btn.setAttribute("aria-selected", String(idx === state.actionIndex));
+    if (idx === state.actionIndex) {
+      btn.classList.add("is-active");
+    }
+    btn.textContent = act.label;
+    btn.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      onExecuteAction(act.action);
+    });
+    menu.appendChild(btn);
+  });
+
+  refs.resultsList.appendChild(menu);
 }
 
 export function updateSelectionOnly(refs: DomRefs, selectedIndex: number): void {

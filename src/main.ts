@@ -2,6 +2,7 @@ import "./styles.css";
 import {
   autocompleteQuery,
   executeItem,
+  executeItemWithAction,
   hideLauncher,
   onLauncherHidden,
   onLauncherShown,
@@ -9,12 +10,15 @@ import {
 } from "./ipc";
 import { attachKeyboardFlow } from "./keyboard";
 import {
+  getActionsForItem,
   getDomRefs,
+  renderActionMenu,
   renderState,
   renderVisibility,
   updateSelectionOnly,
 } from "./renderer";
 import { clampResults, createInitialState, resetQueryState } from "./state";
+import type { ActionKind } from "./types";
 
 function bootstrap(): void {
   const refs = getDomRefs();
@@ -23,6 +27,8 @@ function bootstrap(): void {
 
   const runQuery = async (rawInput: string): Promise<void> => {
     state.query = rawInput;
+    state.actionMenuOpen = false;
+    state.actionIndex = 0;
     const seq = ++state.querySeq;
 
     try {
@@ -91,11 +97,69 @@ function bootstrap(): void {
     }
   };
 
+  const executeWithAction = async (
+    index: number,
+    action: ActionKind
+  ): Promise<void> => {
+    const selected = state.results[index];
+    if (!selected) {
+      return;
+    }
+    state.actionMenuOpen = false;
+    state.actionIndex = 0;
+    renderActionMenu(refs, state, (act) => {
+      void executeWithAction(state.selectedIndex, act);
+    });
+
+    const rows = refs.resultsList.querySelectorAll<HTMLElement>(".result-row");
+    const row = rows[index];
+
+    state.visible = false;
+    if (row) {
+      row.classList.add("is-launched", "is-green");
+    }
+    refs.launcher.classList.add("is-launch-fading");
+
+    void executeItemWithAction(selected.id, action).catch(() => {
+      // Backend logs execution errors; keep UI responsive
+    });
+
+    if (executeTimer !== null) {
+      window.clearTimeout(executeTimer);
+    }
+    executeTimer = window.setTimeout(() => {
+      executeTimer = null;
+      if (!state.visible) {
+        refs.launcher.classList.remove("is-launch-fading", "is-closing");
+        renderVisibility(refs, false);
+        void hideLauncher().catch(() => {
+          // Ignore
+        });
+      }
+    }, 650);
+  };
+
   const handleSelectAndExecute = (index: number, secondary: boolean): void => {
+    if (state.actionMenuOpen) {
+      state.actionMenuOpen = false;
+      renderActionMenu(refs, state, () => {});
+    }
     state.selectedIndex = index;
     updateSelectionOnly(refs, index);
     void executeSelected(index, secondary);
   };
+
+  document.addEventListener("mousedown", (e) => {
+    if (!state.actionMenuOpen) {
+      return;
+    }
+    const target = e.target as HTMLElement | null;
+    if (target && target.closest(".action-menu")) {
+      return;
+    }
+    state.actionMenuOpen = false;
+    renderActionMenu(refs, state, () => {});
+  });
 
   const clearInput = (): void => {
     refs.input.value = "";
@@ -148,6 +212,42 @@ function bootstrap(): void {
     },
     onClearInput: clearInput,
     onHide: hide,
+    onOpenActionMenu: () => {
+      state.actionMenuOpen = true;
+      state.actionIndex = 0;
+      renderActionMenu(refs, state, (act) => {
+        void executeWithAction(state.selectedIndex, act);
+      });
+    },
+    onCloseActionMenu: () => {
+      state.actionMenuOpen = false;
+      state.actionIndex = 0;
+      renderActionMenu(refs, state, (act) => {
+        void executeWithAction(state.selectedIndex, act);
+      });
+      refs.input.focus();
+    },
+    onMoveActionSelection: (nextIndex) => {
+      state.actionIndex = nextIndex;
+      renderActionMenu(refs, state, (act) => {
+        void executeWithAction(state.selectedIndex, act);
+      });
+    },
+    onExecuteAction: () => {
+      const selected = state.results[state.selectedIndex];
+      if (!selected) {
+        return;
+      }
+      const actions = getActionsForItem(selected);
+      const chosen = actions[state.actionIndex];
+      if (chosen) {
+        void executeWithAction(state.selectedIndex, chosen.action);
+      }
+    },
+    getActionCount: () => {
+      const selected = state.results[state.selectedIndex];
+      return selected ? getActionsForItem(selected).length : 0;
+    },
   });
 
   // Initial visible state for dev/preview; Tauri events control real show/hide

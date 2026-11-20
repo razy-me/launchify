@@ -213,10 +213,10 @@ pub fn execute(
     }
 
     let outcome = if let Some(cmd) = item_id.strip_prefix("shell:") {
-        let mode = if secondary {
-            LaunchMode::ShellTerminal
-        } else {
-            LaunchMode::ShellHidden
+        let mode = match action {
+            ActionKind::RunAsAdmin => LaunchMode::Elevated,
+            ActionKind::Secondary => LaunchMode::ShellTerminal,
+            _ => LaunchMode::ShellHidden,
         };
         win32::executor::execute_target(cmd, mode)?;
         ExecuteOutcome::Launched
@@ -232,12 +232,28 @@ pub fn execute(
             value: copy_val.to_string(),
         }
     } else if let Some(file_path) = item_id.strip_prefix("file:") {
-        if action == ActionKind::Secondary {
-            win32::executor::execute_target(file_path, LaunchMode::RevealInExplorer)?;
-        } else if win32::executor::execute_target(file_path, LaunchMode::Normal).is_err() {
-            win32::executor::execute_target(file_path, LaunchMode::RevealInExplorer)?;
+        match action {
+            ActionKind::Reveal | ActionKind::Secondary => {
+                win32::executor::execute_target(file_path, LaunchMode::RevealInExplorer)?;
+                ExecuteOutcome::Launched
+            }
+            ActionKind::CopyPath => {
+                win32::executor::copy_text_to_clipboard(file_path)?;
+                ExecuteOutcome::CopiedToClipboard {
+                    value: file_path.to_string(),
+                }
+            }
+            ActionKind::RunAsAdmin => {
+                win32::executor::execute_target(file_path, LaunchMode::Elevated)?;
+                ExecuteOutcome::Launched
+            }
+            ActionKind::Primary => {
+                if win32::executor::execute_target(file_path, LaunchMode::Normal).is_err() {
+                    win32::executor::execute_target(file_path, LaunchMode::RevealInExplorer)?;
+                }
+                ExecuteOutcome::Launched
+            }
         }
-        ExecuteOutcome::Launched
     } else if item_id == "__inline__" {
         let raw = state
             .last_query
@@ -261,6 +277,17 @@ pub fn execute(
         if let Some(item) = snapshot.items.iter().find(|i| i.id == item_id) {
             if let Some(power_cmd) = item.target.strip_prefix("power:") {
                 win32::executor::system_power_action(power_cmd)?;
+                ExecuteOutcome::Launched
+            } else if action == ActionKind::CopyPath {
+                win32::executor::copy_text_to_clipboard(&item.target)?;
+                ExecuteOutcome::CopiedToClipboard {
+                    value: item.target.clone(),
+                }
+            } else if action == ActionKind::Reveal {
+                win32::executor::execute_target(&item.target, LaunchMode::RevealInExplorer)?;
+                ExecuteOutcome::Launched
+            } else if action == ActionKind::RunAsAdmin {
+                win32::executor::execute_target(&item.target, LaunchMode::Elevated)?;
                 ExecuteOutcome::Launched
             } else {
                 match item.kind {
