@@ -5,6 +5,31 @@ pub struct ProcessInfo {
     pub memory_kb: u64,
 }
 
+fn is_protected_system_process(pid: u32, name: &str) -> bool {
+    if pid == 0 || pid == 4 {
+        return true;
+    }
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "[system process]"
+            | "system"
+            | "secure system"
+            | "registry"
+            | "memory compression"
+            | "idle"
+            | "smss.exe"
+            | "csrss.exe"
+            | "wininit.exe"
+            | "services.exe"
+            | "lsass.exe"
+            | "lsaiso.exe"
+            | "svchost.exe"
+            | "winlogon.exe"
+            | "fontdrvhost.exe"
+            | "dwm.exe"
+    )
+}
+
 #[cfg(windows)]
 pub fn list_processes() -> Result<Vec<ProcessInfo>, String> {
     use std::mem::size_of;
@@ -64,11 +89,13 @@ pub fn list_processes() -> Result<Vec<ProcessInfo>, String> {
                     0
                 };
 
-                processes.push(ProcessInfo {
-                    pid,
-                    name,
-                    memory_kb,
-                });
+                if !is_protected_system_process(pid, &name) {
+                    processes.push(ProcessInfo {
+                        pid,
+                        name,
+                        memory_kb,
+                    });
+                }
 
                 if Process32NextW(snapshot, &mut entry).is_err() {
                     break;
@@ -77,6 +104,12 @@ pub fn list_processes() -> Result<Vec<ProcessInfo>, String> {
         }
 
         let _ = CloseHandle(snapshot);
+        processes.sort_by(|a, b| {
+            a.name
+                .to_ascii_lowercase()
+                .cmp(&b.name.to_ascii_lowercase())
+                .then_with(|| a.pid.cmp(&b.pid))
+        });
         Ok(processes)
     }
 }
