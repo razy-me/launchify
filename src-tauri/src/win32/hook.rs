@@ -13,8 +13,8 @@ pub enum HookDecision {
     Trigger,
 }
 
-/// Pure state machine for detecting a solo tap of the Left Alt key (`VK_LMENU`)
-/// while leaving `Alt+*` shortcuts untouched.
+/// Pure state machine for detecting a solo tap of the Right Shift key (`VK_RSHIFT`)
+/// while leaving `Shift+*` shortcuts untouched.
 #[derive(Debug, Default)]
 pub struct WinKeyStateMachine {
     active_trigger: Option<u16>,
@@ -27,13 +27,13 @@ impl WinKeyStateMachine {
     }
 
     /// Processes a low-level keyboard event and returns whether to pass through
-    /// or trigger the launcher toggle on a solo `VK_LMENU` or `VK_RSHIFT` tap.
+    /// or trigger the launcher toggle on a solo `VK_RSHIFT` tap.
     pub fn on_key_event(&mut self, vk: u16, is_key_down: bool, is_injected: bool) -> HookDecision {
         if is_injected {
             return HookDecision::PassThrough;
         }
 
-        if vk == VK_TRIGGER_CODE || vk == VK_RSHIFT_CODE {
+        if vk == VK_RSHIFT_CODE {
             if is_key_down {
                 match self.active_trigger {
                     None => {
@@ -222,11 +222,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn solo_lalt_tap_triggers_launcher() {
+    fn solo_lalt_tap_does_not_trigger_launcher() {
         let mut sm = WinKeyStateMachine::new();
         assert_eq!(sm.on_key_event(VK_TRIGGER_CODE, true, false), HookDecision::PassThrough);
-        assert_eq!(sm.on_key_event(VK_TRIGGER_CODE, true, false), HookDecision::PassThrough);
-        assert_eq!(sm.on_key_event(VK_TRIGGER_CODE, false, false), HookDecision::Trigger);
+        assert_eq!(sm.on_key_event(VK_TRIGGER_CODE, false, false), HookDecision::PassThrough);
     }
 
     #[test]
