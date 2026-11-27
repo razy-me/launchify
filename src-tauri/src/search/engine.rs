@@ -138,7 +138,7 @@ impl SearchEngine {
         max_results: usize,
         now_unix: i64,
     ) -> Vec<SearchResult> {
-        let mut scored: Vec<(&IndexItem, f64)> = items
+        let mut results: Vec<SearchResult> = items
             .iter()
             .map(|item| {
                 let frec = frecency
@@ -146,29 +146,62 @@ impl SearchEngine {
                     .get(&item.id)
                     .map(|e| frecency_score(e, now_unix))
                     .unwrap_or(0.0);
-                (item, frec)
+                to_search_result(item, frec)
             })
             .collect();
 
-        if scored.len() > max_results {
-            scored.select_nth_unstable_by(max_results, |a, b| {
-                b.1.partial_cmp(&a.1)
-                    .unwrap_or(Ordering::Equal)
-                    .then_with(|| a.0.title.cmp(&b.0.title))
-            });
-            scored.truncate(max_results);
+        // Also include frequently launched `file:` items (e.g. from `f:` search)
+        // that are not part of the static index snapshot.
+        let indexed_ids: std::collections::HashSet<&str> =
+            items.iter().map(|i| i.id.as_str()).collect();
+        for (id, entry) in &frecency.entries {
+            if indexed_ids.contains(id.as_str()) {
+                continue;
+            }
+            if let Some(path_str) = id.strip_prefix("file:") {
+                let path = std::path::Path::new(path_str);
+                if path.exists() {
+                    let title = path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_else(|| path_str.to_string());
+                    let subtitle = path
+                        .parent()
+                        .map(|p| p.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    let score = frecency_score(entry, now_unix);
+                    results.push(SearchResult {
+                        id: id.clone(),
+                        title,
+                        subtitle,
+                        kind: crate::model::ItemKind::File,
+                        icon_path: None,
+                        secondary_hint: Some("Open containing folder".to_string()),
+                        score,
+                        autocomplete_text: None,
+                    });
+                }
+            }
         }
 
-        scored.sort_by(|a, b| {
-            b.1.partial_cmp(&a.1)
+        if results.len() > max_results {
+            results.select_nth_unstable_by(max_results, |a, b| {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(Ordering::Equal)
+                    .then_with(|| a.title.cmp(&b.title))
+            });
+            results.truncate(max_results);
+        }
+
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
                 .unwrap_or(Ordering::Equal)
-                .then_with(|| a.0.title.cmp(&b.0.title))
+                .then_with(|| a.title.cmp(&b.title))
         });
 
-        scored
-            .into_iter()
-            .map(|(item, score)| to_search_result(item, score))
-            .collect()
+        results
     }
 }
 
