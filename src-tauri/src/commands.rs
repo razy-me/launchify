@@ -146,7 +146,31 @@ pub fn query(raw: String, state: State<'_, AppState>) -> Result<QueryResponse, S
 
     if let Some(fq) = find_rest {
         let roots = find_files::default_find_roots(&cfg.curated_folders);
-        let results = find_files::search_recent_files(fq, &roots, cfg.max_results);
+        let mut results = find_files::search_recent_files(fq, &roots, cfg.max_results.max(50));
+        if let Ok(frecency) = state.frecency.lock() {
+            let prefix = normalize_prefix(&raw);
+            let now = now_unix();
+            for r in &mut results {
+                let f_score = frecency
+                    .entries
+                    .get(&r.id)
+                    .map(|e| crate::frecency::frecency_score(e, now))
+                    .unwrap_or(0.0);
+                let p_boost = crate::frecency::prefix_memory_boost(
+                    &frecency,
+                    &prefix,
+                    &r.id,
+                    cfg.prefix_memory_threshold,
+                );
+                r.score += f_score + p_boost;
+            }
+            results.sort_by(|a, b| {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        }
+        results.truncate(cfg.max_results);
         return Ok(QueryResponse {
             mode: PrefixMode::Path,
             results,
